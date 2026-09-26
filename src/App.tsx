@@ -8,7 +8,17 @@ import {
   WhatsAppSettings, 
   MediaItem 
 } from './types';
-import { dataService, openWhatsAppOrder } from './services/dataService';
+import { 
+  dataService, 
+  openWhatsAppOrder,
+  INITIAL_PRODUCTS,
+  INITIAL_CATEGORIES,
+  INITIAL_HERO_SLIDES,
+  INITIAL_BUSINESS_INFO,
+  INITIAL_HOMEPAGE_CONTENT,
+  INITIAL_WHATSAPP_SETTINGS,
+  INITIAL_MEDIA_ITEMS
+} from './services/dataService';
 import { Header } from './components/Header';
 import { Hero } from './components/Hero';
 import { FeaturedSpotlight } from './components/FeaturedSpotlight';
@@ -20,7 +30,6 @@ import { CallToActionStrip } from './components/CallToActionStrip';
 import { ContactView } from './components/ContactView';
 import { AdminDashboard } from './components/AdminDashboard';
 import { Footer } from './components/Footer';
-import { ShieldCheck } from 'lucide-react';
 
 const getInitialView = (): string => {
   if (typeof window === 'undefined') return 'home';
@@ -45,14 +54,14 @@ const getInitialView = (): string => {
 };
 
 export default function App() {
-  // Application Data State
-  const [products, setProducts] = useState<Product[]>([]);
-  const [categories, setCategories] = useState<Category[]>([]);
-  const [heroSlides, setHeroSlides] = useState<HeroSlide[]>([]);
-  const [businessInfo, setBusinessInfo] = useState<BusinessInfo>(dataService.getBusinessInfo());
-  const [homepageContent, setHomepageContent] = useState<HomepageContent>(dataService.getHomepageContent());
-  const [whatsappSettings, setWhatsappSettings] = useState<WhatsAppSettings>(dataService.getWhatsAppSettings());
-  const [mediaItems, setMediaItems] = useState<MediaItem[]>(dataService.getMediaItems());
+  // Application Data State (Initialized with fallback defaults, updated dynamically via Firestore)
+  const [products, setProducts] = useState<Product[]>(INITIAL_PRODUCTS);
+  const [categories, setCategories] = useState<Category[]>(INITIAL_CATEGORIES);
+  const [heroSlides, setHeroSlides] = useState<HeroSlide[]>(INITIAL_HERO_SLIDES);
+  const [businessInfo, setBusinessInfo] = useState<BusinessInfo>(INITIAL_BUSINESS_INFO);
+  const [homepageContent, setHomepageContent] = useState<HomepageContent>(INITIAL_HOMEPAGE_CONTENT);
+  const [whatsappSettings, setWhatsappSettings] = useState<WhatsAppSettings>(INITIAL_WHATSAPP_SETTINGS);
+  const [mediaItems, setMediaItems] = useState<MediaItem[]>(INITIAL_MEDIA_ITEMS);
 
   // Navigation & View States
   const [currentView, setCurrentView] = useState<string>(getInitialView);
@@ -62,21 +71,73 @@ export default function App() {
   // Modals
   const [selectedProductDetails, setSelectedProductDetails] = useState<Product | null>(null);
 
-  // Reload data from service
-  const loadData = useCallback(() => {
-    setProducts(dataService.getProducts());
-    setCategories(dataService.getCategories());
-    setHeroSlides(dataService.getHeroSlides());
-    setBusinessInfo(dataService.getBusinessInfo());
-    setHomepageContent(dataService.getHomepageContent());
-    setWhatsappSettings(dataService.getWhatsAppSettings());
-    setMediaItems(dataService.getMediaItems());
+  // Set up realtime Firestore subscriptions on mount
+  useEffect(() => {
+    // Attempt one-time seed if Firestore collections are empty
+    dataService.seedInitialDataIfEmpty().catch(console.warn);
+
+    // 1. Products subscription
+    const unsubProducts = dataService.subscribeToProducts((list) => {
+      if (list && list.length > 0) {
+        setProducts(list);
+      }
+    });
+
+    // 2. Categories subscription
+    const unsubCategories = dataService.subscribeToCategories((cats) => {
+      if (cats && cats.length > 0) {
+        setCategories(cats);
+      }
+    });
+
+    // 3. Hero Slides subscription
+    const unsubHeroSlides = dataService.subscribeToHeroSlides((slides) => {
+      if (slides && slides.length > 0) {
+        setHeroSlides(slides);
+      }
+    });
+
+    // 4. Homepage Content subscription
+    const unsubHomepage = dataService.subscribeToHomepageContent((hp) => {
+      if (hp) {
+        setHomepageContent(hp);
+      }
+    });
+
+    // 5. Business Info subscription
+    const unsubBiz = dataService.subscribeToBusinessInfo((biz) => {
+      if (biz) {
+        setBusinessInfo(biz);
+      }
+    });
+
+    // 6. WhatsApp Settings subscription
+    const unsubWA = dataService.subscribeToWhatsAppSettings((wa) => {
+      if (wa) {
+        setWhatsappSettings(wa);
+      }
+    });
+
+    // 7. Media Library subscription
+    const unsubMedia = dataService.subscribeToMedia((items) => {
+      if (items && items.length > 0) {
+        setMediaItems(items);
+      }
+    });
+
+    return () => {
+      unsubProducts();
+      unsubCategories();
+      unsubHeroSlides();
+      unsubHomepage();
+      unsubBiz();
+      unsubWA();
+      unsubMedia();
+    };
   }, []);
 
-  // Initialize data on mount & listen to route changes
+  // Listen to browser URL changes
   useEffect(() => {
-    loadData();
-
     const handleUrlChange = () => {
       const path = window.location.pathname.toLowerCase();
       const hash = window.location.hash.toLowerCase().replace('#', '');
@@ -106,7 +167,7 @@ export default function App() {
 
       if (hash.startsWith('product-')) {
         const prodId = hash.replace('product-', '');
-        const p = dataService.getProductById(prodId);
+        const p = products.find(item => item.id === prodId);
         if (p) setSelectedProductDetails(p);
       }
     };
@@ -115,7 +176,7 @@ export default function App() {
     window.addEventListener('popstate', handleUrlChange);
     window.addEventListener('hashchange', handleUrlChange);
 
-    // Keyboard shortcut for shop management (Ctrl+Alt+A or Cmd+Alt+A)
+    // Keyboard shortcut for administrator portal (Ctrl+Alt+A or Cmd+Alt+A)
     const handleKeyDown = (e: KeyboardEvent) => {
       if ((e.ctrlKey || e.metaKey) && e.altKey && (e.key === 'a' || e.key === 'A')) {
         e.preventDefault();
@@ -136,7 +197,7 @@ export default function App() {
       window.removeEventListener('hashchange', handleUrlChange);
       window.removeEventListener('keydown', handleKeyDown);
     };
-  }, [loadData]);
+  }, [products]);
 
   // Navigation Handler
   const handleNavigate = (view: string, filter?: string) => {
@@ -162,7 +223,7 @@ export default function App() {
 
   // Direct WhatsApp Order Handler - Directly launches WhatsApp with dynamic pre-filled message
   const handleOpenOrder = (productName?: string) => {
-    openWhatsAppOrder(productName);
+    openWhatsAppOrder(productName, whatsappSettings);
   };
 
   // ====================================================
@@ -180,7 +241,7 @@ export default function App() {
         mediaItems={mediaItems}
         isStandalonePage={true}
         onClose={() => handleNavigate('home')}
-        onDataChanged={loadData}
+        onDataChanged={() => {}}
       />
     );
   }
@@ -357,18 +418,6 @@ export default function App() {
         onClose={() => setSelectedProductDetails(null)}
         onOpenOrder={handleOpenOrder}
       />
-
-      {/* Discreet Developer / Administrator Access Button (bottom-left) */}
-      <div className="fixed bottom-4 left-4 z-40">
-        <button
-          onClick={() => handleNavigate('admin')}
-          className="bg-[#0d1222]/90 hover:bg-[#13192f] text-slate-400 hover:text-[#d4ff32] border border-[#273153] hover:border-[#d4ff32]/60 px-3 py-1.5 rounded-full text-[11px] font-mono shadow-xl backdrop-blur flex items-center gap-1.5 transition-all cursor-pointer group"
-          title="Open Admin Dashboard (/admin)"
-        >
-          <ShieldCheck className="w-3.5 h-3.5 text-[#d4ff32] group-hover:rotate-12 transition-transform" />
-          <span>Admin Dashboard (/admin)</span>
-        </button>
-      </div>
 
       {/* Footer */}
       <Footer

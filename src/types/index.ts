@@ -22,8 +22,8 @@ export interface Product {
   availability: string;
   featured?: boolean;
   order?: number;
-  createdAt: string;
-  updatedAt: string;
+  createdAt?: string;
+  updatedAt?: string;
 }
 
 export interface Category {
@@ -31,6 +31,8 @@ export interface Category {
   name: string;
   slug: string;
   order?: number;
+  createdAt?: string;
+  updatedAt?: string;
 }
 
 export interface EnquiryOrder {
@@ -61,6 +63,8 @@ export interface HeroSlide {
   description?: string;
   active: boolean;
   order?: number;
+  createdAt?: string;
+  updatedAt?: string;
 }
 
 export interface BusinessInfo {
@@ -71,6 +75,7 @@ export interface BusinessInfo {
   location: string;
   shopDoor: string;
   phones: string[];
+  updatedAt?: string;
 }
 
 export interface MediaItem {
@@ -83,7 +88,7 @@ export interface MediaItem {
   width?: number;
   height?: number;
   mediaType?: 'image' | 'video';
-  duration?: number; // duration in seconds (max 1min 30s / 90s)
+  duration?: number; // duration in seconds (max 50s)
   thumbnailUrl?: string;
   locationUsed?: string; // where this media is placed on the site
   createdAt: string;
@@ -186,6 +191,20 @@ export interface HomepageContent {
   };
 
   videoPlacements?: VideoPlacementConfig[];
+  updatedAt?: string;
+}
+
+export interface VideoSettings {
+  enabled?: boolean;
+  url?: string;
+  videoUrl?: string;
+  title?: string;
+  posterUrl?: string;
+  duration?: number;
+  autoplay?: boolean;
+  muted?: boolean;
+  loop?: boolean;
+  controls?: boolean;
 }
 
 export interface WhatsAppSettings {
@@ -193,4 +212,5 @@ export interface WhatsAppSettings {
   internationalNumber: string;
   messageTemplate: string;
   defaultMessage: string;
+  updatedAt?: string;
 }

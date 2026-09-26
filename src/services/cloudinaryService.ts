@@ -3,18 +3,18 @@
  * Cloud Name: zpzdjznd
  * Upload Preset: ankobeng(yaw)_upload
  * Direct client-side unsigned upload (no API secret exposed)
- * Supports BOTH Images and Videos (up to 1 min 30 secs / 90s duration limit for videos)
+ * Supports BOTH Images and Videos (Strictly up to 50s duration limit for videos)
  */
 
 export const CLOUDINARY_CONFIG = {
-  cloudName: 'zpzdjznd',
-  uploadPreset: 'ankobeng(yaw)_upload',
-  imageUploadUrl: 'https://api.cloudinary.com/v1_1/zpzdjznd/image/upload',
-  videoUploadUrl: 'https://api.cloudinary.com/v1_1/zpzdjznd/video/upload',
-  autoUploadUrl: 'https://api.cloudinary.com/v1_1/zpzdjznd/auto/upload'
+  cloudName: import.meta.env.VITE_CLOUDINARY_CLOUD_NAME || 'zpzdjznd',
+  uploadPreset: import.meta.env.VITE_CLOUDINARY_UPLOAD_PRESET || 'ankobeng(yaw)_upload',
+  imageUploadUrl: `https://api.cloudinary.com/v1_1/${import.meta.env.VITE_CLOUDINARY_CLOUD_NAME || 'zpzdjznd'}/image/upload`,
+  videoUploadUrl: `https://api.cloudinary.com/v1_1/${import.meta.env.VITE_CLOUDINARY_CLOUD_NAME || 'zpzdjznd'}/video/upload`,
+  autoUploadUrl: `https://api.cloudinary.com/v1_1/${import.meta.env.VITE_CLOUDINARY_CLOUD_NAME || 'zpzdjznd'}/auto/upload`
 };
 
-export const MAX_VIDEO_DURATION_SECONDS = 90; // 1 min 30 secs limit
+export const MAX_VIDEO_DURATION_SECONDS = 50; // Strict 50 seconds limit
 
 export interface CloudinaryUploadResult {
   url: string;
@@ -35,7 +35,7 @@ export interface CloudinaryUploadResult {
  * Returns video duration in seconds.
  */
 export const getVideoDuration = (file: File | Blob): Promise<number> => {
-  return new Promise((resolve, reject) => {
+  return new Promise((resolve) => {
     try {
       const video = document.createElement('video');
       video.preload = 'metadata';
@@ -100,12 +100,12 @@ export const uploadToCloudinary = async (
   const isVideo = isVideoFile(file, fileName);
   let detectedDuration = 0;
 
-  // Enforce 1 min 30 secs (90s) maximum video duration
+  // Enforce 50-second maximum video duration
   if (isVideo) {
     detectedDuration = await getVideoDuration(file);
     if (detectedDuration > MAX_VIDEO_DURATION_SECONDS) {
       throw new Error(
-        `Video duration exceeds the maximum limit of 1 min 30 secs (${MAX_VIDEO_DURATION_SECONDS} seconds) (Selected: ${Math.round(detectedDuration)}s). Please choose a video of 1 minute 30 seconds or shorter.`
+        `Video duration exceeds the maximum limit of ${MAX_VIDEO_DURATION_SECONDS} seconds (Selected: ${Math.round(detectedDuration)}s). Please choose a video of 50 seconds or shorter.`
       );
     }
   }
@@ -135,7 +135,7 @@ export const uploadToCloudinary = async (
   // Double-check Cloudinary's measured video duration if available
   if (isVideo && returnedDuration > MAX_VIDEO_DURATION_SECONDS) {
     throw new Error(
-      `Cloudinary validated video duration as ${Math.round(returnedDuration)}s, which exceeds the 1 min 30 secs (${MAX_VIDEO_DURATION_SECONDS}s) maximum limit.`
+      `Cloudinary validated video duration as ${Math.round(returnedDuration)}s, which exceeds the ${MAX_VIDEO_DURATION_SECONDS}s maximum limit.`
     );
   }
 

@@ -1,0 +1,171 @@
+{
+  "entities": {
+    "Product": {
+      "title": "Product",
+      "description": "An engine or engine part listed in the Ankobeng Motors catalog",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Unique product identifier" },
+        "name": { "type": "string", "description": "Exact product name based on uploaded filename" },
+        "category": { "type": "string", "description": "Category name, e.g. Engines or Engine Parts" },
+        "images": { "type": "string", "description": "Cloudinary image URLs array" },
+        "imageDetails": { "type": "string", "description": "JSON serialized image details array" },
+        "videoUrl": { "type": "string", "description": "Cloudinary video URL for product demonstration" },
+        "videoPublicId": { "type": "string", "description": "Cloudinary public ID for video" },
+        "videoDuration": { "type": "number", "description": "Duration in seconds (max 50s)" },
+        "description": { "type": "string", "description": "Product details and physical condition" },
+        "application": { "type": "string", "description": "Vehicle fitment and applications" },
+        "fitment": { "type": "string", "description": "Compatible vehicle models" },
+        "condition": { "type": "string", "description": "Condition status, e.g. Shop Stock" },
+        "availability": { "type": "string", "description": "Availability status, e.g. In Stock (Shop Door E-3)" },
+        "featured": { "type": "boolean", "description": "Whether item appears in the featured spotlight" },
+        "order": { "type": "number", "description": "Sorting display order" },
+        "createdAt": { "type": "string", "description": "ISO timestamp of creation" },
+        "updatedAt": { "type": "string", "description": "ISO timestamp of last update" }
+      },
+      "required": ["id", "name", "category", "availability"]
+    },
+    "Category": {
+      "title": "Category",
+      "description": "Inventory product classification category",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Unique category identifier" },
+        "name": { "type": "string", "description": "Category name" },
+        "slug": { "type": "string", "description": "URL-friendly category slug" },
+        "order": { "type": "number", "description": "Display order" },
+        "createdAt": { "type": "string", "description": "ISO timestamp of creation" },
+        "updatedAt": { "type": "string", "description": "ISO timestamp of last update" }
+      },
+      "required": ["id", "name", "slug"]
+    },
+    "HeroSlide": {
+      "title": "HeroSlide",
+      "description": "Hero section carousel visual slide or video specimen",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Unique hero slide identifier" },
+        "title": { "type": "string", "description": "Primary slide title" },
+        "subtitle": { "type": "string", "description": "Secondary subtitle text" },
+        "badge": { "type": "string", "description": "Badge text, e.g. SHOP DOOR E-3" },
+        "image": { "type": "string", "description": "Slide image or video URL" },
+        "publicId": { "type": "string", "description": "Cloudinary public ID" },
+        "mediaType": { "type": "string", "description": "Media type: image or video" },
+        "videoUrl": { "type": "string", "description": "Video stream URL if video" },
+        "videoDuration": { "type": "number", "description": "Video duration in seconds" },
+        "description": { "type": "string", "description": "Slide caption" },
+        "active": { "type": "boolean", "description": "Whether slide is active in carousel" },
+        "order": { "type": "number", "description": "Display sequence order" },
+        "createdAt": { "type": "string", "description": "Creation timestamp" },
+        "updatedAt": { "type": "string", "description": "Update timestamp" }
+      },
+      "required": ["id", "title", "image", "active"]
+    },
+    "HomepageContent": {
+      "title": "HomepageContent",
+      "description": "Configurable headlines, background media, and section video placements",
+      "type": "object",
+      "properties": {
+        "heroHeadlinePrefix": { "type": "string", "description": "Hero headline prefix" },
+        "heroHeadlineHighlight": { "type": "string", "description": "Hero headline highlight" },
+        "heroHeadlineSuffix": { "type": "string", "description": "Hero headline suffix" },
+        "heroLocationSubtitle": { "type": "string", "description": "Hero location text" },
+        "featuredTitle": { "type": "string", "description": "Featured section title" },
+        "featuredSubtitle": { "type": "string", "description": "Featured section subtitle" },
+        "catalogueTitle": { "type": "string", "description": "Catalogue section title" },
+        "catalogueSubtitle": { "type": "string", "description": "Catalogue section subtitle" },
+        "aboutHeadline": { "type": "string", "description": "About section headline" },
+        "aboutDescription": { "type": "string", "description": "About section text" },
+        "ctaHeadline": { "type": "string", "description": "CTA banner headline" },
+        "ctaDescription": { "type": "string", "description": "CTA banner text" },
+        "homepageBackgroundImage": { "type": "string", "description": "Homepage background image URL" },
+        "homepageBackgroundType": { "type": "string", "description": "image or video" },
+        "homepageBackgroundVideo": { "type": "string", "description": "Homepage background video URL" },
+        "updatedAt": { "type": "string", "description": "Last updated timestamp" }
+      },
+      "required": ["heroHeadlinePrefix", "heroHeadlineHighlight"]
+    },
+    "MediaItem": {
+      "title": "MediaItem",
+      "description": "Image or video asset stored on Cloudinary with metadata",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Unique media identifier" },
+        "url": { "type": "string", "description": "Cloudinary CDN URL" },
+        "publicId": { "type": "string", "description": "Cloudinary public ID" },
+        "originalFilename": { "type": "string", "description": "Original filename before upload" },
+        "format": { "type": "string", "description": "File format, e.g. jpg, mp4" },
+        "bytes": { "type": "number", "description": "File size in bytes" },
+        "mediaType": { "type": "string", "description": "image or video" },
+        "duration": { "type": "number", "description": "Duration in seconds for video (max 50s)" },
+        "thumbnailUrl": { "type": "string", "description": "Thumbnail preview URL" },
+        "locationUsed": { "type": "string", "description": "Where on the site this media is placed" },
+        "createdAt": { "type": "string", "description": "Upload timestamp" }
+      },
+      "required": ["id", "url", "originalFilename"]
+    },
+    "BusinessInfo": {
+      "title": "BusinessInfo",
+      "description": "Official business metadata for Ankobeng Motors",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string", "description": "ANKOBENG MOTORS" },
+        "owner": { "type": "string", "description": "JOSEPH OBENG ANDERSON" },
+        "description": { "type": "string", "description": "Business description" },
+        "address": { "type": "string", "description": "Postal address" },
+        "location": { "type": "string", "description": "Physical shop location" },
+        "shopDoor": { "type": "string", "description": "SHOP DOOR E-3" },
+        "phones": { "type": "string", "description": "Contact telephone numbers" },
+        "updatedAt": { "type": "string", "description": "Last updated timestamp" }
+      },
+      "required": ["name", "owner", "location"]
+    },
+    "Settings": {
+      "title": "Settings",
+      "description": "Application settings including WhatsApp order dispatch",
+      "type": "object",
+      "properties": {
+        "phoneNumber": { "type": "string", "description": "Local WhatsApp phone number" },
+        "internationalNumber": { "type": "string", "description": "International WhatsApp phone number (233243324183)" },
+        "messageTemplate": { "type": "string", "description": "Template with {productName}" },
+        "defaultMessage": { "type": "string", "description": "Default enquiry message" },
+        "updatedAt": { "type": "string", "description": "Last updated timestamp" }
+      },
+      "required": ["internationalNumber"]
+    }
+  },
+  "firestore": {
+    "/products/{productId}": {
+      "schema": "Product",
+      "description": "Collection of engines and engine spare parts"
+    },
+    "/categories/{categoryId}": {
+      "schema": "Category",
+      "description": "Inventory classification categories"
+    },
+    "/heroSlides/{slideId}": {
+      "schema": "HeroSlide",
+      "description": "Hero carousel slides and video items"
+    },
+    "/homepageContent/{docId}": {
+      "schema": "HomepageContent",
+      "description": "Configurable homepage texts, background media, and video placement config"
+    },
+    "/media/{mediaId}": {
+      "schema": "MediaItem",
+      "description": "Cloudinary media library items"
+    },
+    "/businessInfo/{docId}": {
+      "schema": "BusinessInfo",
+      "description": "Official business identity, contact numbers, and shop location"
+    },
+    "/settings/{docId}": {
+      "schema": "Settings",
+      "description": "System settings such as WhatsApp ordering configuration"
+    },
+    "/admins/{adminUid}": {
+      "schema": { "$ref": "#/entities/Settings" },
+      "description": "Authenticated administrators with CMS write privileges"
+    }
+  }
+}

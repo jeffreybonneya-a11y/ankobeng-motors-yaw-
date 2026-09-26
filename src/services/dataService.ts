@@ -1,7 +1,27 @@
 import { 
+  collection, 
+  doc, 
+  getDocs, 
+  getDoc, 
+  setDoc, 
+  updateDoc, 
+  deleteDoc, 
+  onSnapshot, 
+  query, 
+  orderBy,
+  writeBatch
+} from 'firebase/firestore';
+import { 
+  signInWithEmailAndPassword, 
+  signInWithPopup, 
+  signOut, 
+  onAuthStateChanged,
+  User 
+} from 'firebase/auth';
+import { db, auth, googleProvider, handleFirestoreError, OperationType } from './firebase';
+import { 
   Product, 
   Category, 
-  EnquiryOrder, 
   HeroSlide, 
   BusinessInfo, 
   MediaItem, 
@@ -111,8 +131,6 @@ export const INITIAL_HOMEPAGE_CONTENT: HomepageContent = {
   aboutDescription: 'Every engine on our racks is physically stocked at our Abossey Okai store. Mechanics, fleet operators, and vehicle owners are welcome to inspect units directly before ordering.',
   ctaHeadline: 'LOOKING FOR A SPECIFIC ENGINE?',
   ctaDescription: 'Tell us what you need and contact Ankobeng Motors for the engine or engine part you are looking for. Direct stock availability at Abossey Okai.',
-  
-  // Dedicated Homepage Background Setting
   homepageBackgroundImage: STOREFRONT_IMAGE,
   homepageBackgroundType: 'image',
   homepageBackgroundVideo: '',
@@ -348,22 +366,12 @@ export const INITIAL_MEDIA_ITEMS: MediaItem[] = [
   }
 ];
 
-// LocalStorage persistence keys
-const KEYS = {
-  PRODUCTS: 'ankobeng_products_v3',
-  CATEGORIES: 'ankobeng_categories_v3',
-  HERO_SLIDES: 'ankobeng_hero_slides_v3',
-  BUSINESS_INFO: 'ankobeng_business_info_v3',
-  HOMEPAGE_CONTENT: 'ankobeng_homepage_content_v3',
-  WHATSAPP_SETTINGS: 'ankobeng_whatsapp_settings_v3',
-  MEDIA_LIBRARY: 'ankobeng_media_library_v3',
-  ADMIN_PASSCODE: 'ankobeng_admin_passcode_v3',
-  ADMIN_AUTH: 'ankobeng_admin_auth_v3'
-};
-
+/**
+ * EXACT PRODUCT NAME RULE:
+ * Uploaded product filename without only the file extension.
+ * Do not rewrite, normalize, or rename.
+ */
 export const cleanProductNameFromFileName = (fileName: string): string => {
-  // Exact rule: Use the exact file name with only the file extension removed.
-  // Do not rewrite, shorten, improve, capitalize, or invent product names.
   const lastDotIndex = fileName.lastIndexOf('.');
   if (lastDotIndex === -1) return fileName;
   return fileName.substring(0, lastDotIndex);
@@ -371,27 +379,10 @@ export const cleanProductNameFromFileName = (fileName: string): string => {
 
 export const dataService = {
   // --------------------------------------------------------------------------
-  // WhatsApp Settings & Direct Ordering Flow
+  // Direct WhatsApp Order URL
   // --------------------------------------------------------------------------
-  getWhatsAppSettings(): WhatsAppSettings {
-    const raw = localStorage.getItem(KEYS.WHATSAPP_SETTINGS);
-    if (!raw) {
-      localStorage.setItem(KEYS.WHATSAPP_SETTINGS, JSON.stringify(INITIAL_WHATSAPP_SETTINGS));
-      return INITIAL_WHATSAPP_SETTINGS;
-    }
-    try {
-      return { ...INITIAL_WHATSAPP_SETTINGS, ...JSON.parse(raw) };
-    } catch {
-      return INITIAL_WHATSAPP_SETTINGS;
-    }
-  },
-
-  saveWhatsAppSettings(settings: WhatsAppSettings): void {
-    localStorage.setItem(KEYS.WHATSAPP_SETTINGS, JSON.stringify(settings));
-  },
-
-  getWhatsAppOrderUrl(productName?: string): string {
-    const settings = this.getWhatsAppSettings();
+  getWhatsAppOrderUrl(productName?: string, currentSettings?: WhatsAppSettings): string {
+    const settings = currentSettings || INITIAL_WHATSAPP_SETTINGS;
     let message = '';
     if (productName && productName.trim()) {
       message = (settings.messageTemplate || 'Hello Ankobeng Motors, please I want to order {productName}.')
@@ -404,331 +395,359 @@ export const dataService = {
   },
 
   // --------------------------------------------------------------------------
-  // Admin Authentication
+  // Firebase Authentication
   // --------------------------------------------------------------------------
-  verifyAdminPasscode(enteredPasscode: string): boolean {
-    const trimmed = enteredPasscode.trim();
-    if (!trimmed) return false;
-    // Primary requested passcode is 'yaw'
-    if (trimmed.toLowerCase() === 'yaw') return true;
-    const stored = localStorage.getItem(KEYS.ADMIN_PASSCODE);
-    if (stored && (trimmed === stored || trimmed.toLowerCase() === stored.toLowerCase())) return true;
-    const fallbackPasscodes = ['0243324183', 'ankobeng2026', '2026'];
-    return fallbackPasscodes.includes(trimmed);
+  onAuthChange(callback: (user: User | null) => void) {
+    return onAuthStateChanged(auth, callback);
   },
 
-  setAdminPasscode(newPasscode: string): void {
-    localStorage.setItem(KEYS.ADMIN_PASSCODE, newPasscode.trim());
+  getCurrentUser(): User | null {
+    return auth.currentUser;
   },
 
-  isAdminAuthenticated(): boolean {
-    return (
-      sessionStorage.getItem(KEYS.ADMIN_AUTH) === 'true' ||
-      localStorage.getItem(KEYS.ADMIN_AUTH) === 'true'
-    );
+  async loginWithEmailPassword(email: string, pass: string): Promise<User> {
+    const userCredential = await signInWithEmailAndPassword(auth, email.trim(), pass);
+    return userCredential.user;
   },
 
-  setAdminAuthenticated(authenticated: boolean, persist = false): void {
-    if (authenticated) {
-      sessionStorage.setItem(KEYS.ADMIN_AUTH, 'true');
-      if (persist) {
-        localStorage.setItem(KEYS.ADMIN_AUTH, 'true');
-      }
-    } else {
-      sessionStorage.removeItem(KEYS.ADMIN_AUTH);
-      localStorage.removeItem(KEYS.ADMIN_AUTH);
-    }
+  async loginWithGoogle(): Promise<User> {
+    const result = await signInWithPopup(auth, googleProvider);
+    return result.user;
   },
 
-  logoutAdmin(): void {
-    sessionStorage.removeItem(KEYS.ADMIN_AUTH);
-    localStorage.removeItem(KEYS.ADMIN_AUTH);
+  async logoutAdmin(): Promise<void> {
+    await signOut(auth);
   },
 
-  // --------------------------------------------------------------------------
-  // Products Management
-  // --------------------------------------------------------------------------
-  getProducts(): Product[] {
-    const raw = localStorage.getItem(KEYS.PRODUCTS);
-    if (!raw) {
-      localStorage.setItem(KEYS.PRODUCTS, JSON.stringify(INITIAL_PRODUCTS));
-      return INITIAL_PRODUCTS;
+  async isUserAdmin(user: User | null): Promise<boolean> {
+    if (!user) return false;
+    const adminEmails = ['10362581@upsamail.edu.gh'];
+    if (user.email && adminEmails.includes(user.email.toLowerCase().trim())) {
+      return true;
     }
     try {
-      const parsed: Product[] = JSON.parse(raw);
-      return parsed.sort((a, b) => (a.order ?? 999) - (b.order ?? 999));
+      const adminDoc = await getDoc(doc(db, 'admins', user.uid));
+      return adminDoc.exists() && adminDoc.data()?.role === 'admin';
     } catch {
-      return INITIAL_PRODUCTS;
+      return false;
     }
   },
 
-  getProductById(id: string): Product | undefined {
-    return this.getProducts().find(p => p.id === id);
+  // --------------------------------------------------------------------------
+  // Firestore Realtime Subscriptions (Single Source of Truth)
+  // --------------------------------------------------------------------------
+  subscribeToProducts(onData: (products: Product[]) => void, onError?: (err: Error) => void) {
+    const q = query(collection(db, 'products'), orderBy('order', 'asc'));
+    return onSnapshot(q, (snapshot) => {
+      const list: Product[] = [];
+      snapshot.forEach((docSnap) => {
+        list.push({ id: docSnap.id, ...(docSnap.data() as Omit<Product, 'id'>) });
+      });
+      onData(list);
+    }, (error) => {
+      console.error('Products listener error:', error);
+      onError?.(error);
+      handleFirestoreError(error, OperationType.GET, 'products');
+    });
   },
 
-  saveProducts(products: Product[]): void {
-    localStorage.setItem(KEYS.PRODUCTS, JSON.stringify(products));
+  subscribeToCategories(onData: (categories: Category[]) => void, onError?: (err: Error) => void) {
+    const q = query(collection(db, 'categories'), orderBy('order', 'asc'));
+    return onSnapshot(q, (snapshot) => {
+      const list: Category[] = [];
+      snapshot.forEach((docSnap) => {
+        list.push({ id: docSnap.id, ...(docSnap.data() as Omit<Category, 'id'>) });
+      });
+      onData(list);
+    }, (error) => {
+      console.error('Categories listener error:', error);
+      onError?.(error);
+      handleFirestoreError(error, OperationType.GET, 'categories');
+    });
   },
 
-  addProduct(product: Omit<Product, 'id' | 'createdAt' | 'updatedAt'>): Product {
-    const products = this.getProducts();
-    const newProduct: Product = {
-      ...product,
-      id: `prod-${Date.now()}`,
-      order: products.length + 1,
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString()
-    };
-    products.unshift(newProduct);
-    this.saveProducts(products);
-    return newProduct;
+  subscribeToHeroSlides(onData: (slides: HeroSlide[]) => void, onError?: (err: Error) => void) {
+    const q = query(collection(db, 'heroSlides'), orderBy('order', 'asc'));
+    return onSnapshot(q, (snapshot) => {
+      const list: HeroSlide[] = [];
+      snapshot.forEach((docSnap) => {
+        list.push({ id: docSnap.id, ...(docSnap.data() as Omit<HeroSlide, 'id'>) });
+      });
+      onData(list);
+    }, (error) => {
+      console.error('HeroSlides listener error:', error);
+      onError?.(error);
+      handleFirestoreError(error, OperationType.GET, 'heroSlides');
+    });
   },
 
-  updateProduct(product: Product): void {
-    const products = this.getProducts();
-    const index = products.findIndex(p => p.id === product.id);
-    if (index !== -1) {
-      products[index] = {
+  subscribeToHomepageContent(onData: (content: HomepageContent) => void, onError?: (err: Error) => void) {
+    const docRef = doc(db, 'homepageContent', 'main');
+    return onSnapshot(docRef, (snapshot) => {
+      if (snapshot.exists()) {
+        const data = snapshot.data() as HomepageContent;
+        onData({ ...INITIAL_HOMEPAGE_CONTENT, ...data });
+      } else {
+        onData(INITIAL_HOMEPAGE_CONTENT);
+      }
+    }, (error) => {
+      console.error('HomepageContent listener error:', error);
+      onError?.(error);
+      handleFirestoreError(error, OperationType.GET, 'homepageContent/main');
+    });
+  },
+
+  subscribeToBusinessInfo(onData: (info: BusinessInfo) => void, onError?: (err: Error) => void) {
+    const docRef = doc(db, 'businessInfo', 'main');
+    return onSnapshot(docRef, (snapshot) => {
+      if (snapshot.exists()) {
+        onData({ ...INITIAL_BUSINESS_INFO, ...(snapshot.data() as BusinessInfo) });
+      } else {
+        onData(INITIAL_BUSINESS_INFO);
+      }
+    }, (error) => {
+      console.error('BusinessInfo listener error:', error);
+      onError?.(error);
+      handleFirestoreError(error, OperationType.GET, 'businessInfo/main');
+    });
+  },
+
+  subscribeToWhatsAppSettings(onData: (settings: WhatsAppSettings) => void, onError?: (err: Error) => void) {
+    const docRef = doc(db, 'settings', 'whatsapp');
+    return onSnapshot(docRef, (snapshot) => {
+      if (snapshot.exists()) {
+        onData({ ...INITIAL_WHATSAPP_SETTINGS, ...(snapshot.data() as WhatsAppSettings) });
+      } else {
+        onData(INITIAL_WHATSAPP_SETTINGS);
+      }
+    }, (error) => {
+      console.error('WhatsAppSettings listener error:', error);
+      onError?.(error);
+      handleFirestoreError(error, OperationType.GET, 'settings/whatsapp');
+    });
+  },
+
+  subscribeToMedia(onData: (items: MediaItem[]) => void, onError?: (err: Error) => void) {
+    return onSnapshot(collection(db, 'media'), (snapshot) => {
+      const list: MediaItem[] = [];
+      snapshot.forEach((docSnap) => {
+        list.push({ id: docSnap.id, ...(docSnap.data() as Omit<MediaItem, 'id'>) });
+      });
+      list.sort((a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime());
+      onData(list);
+    }, (error) => {
+      console.error('Media listener error:', error);
+      onError?.(error);
+      handleFirestoreError(error, OperationType.GET, 'media');
+    });
+  },
+
+  // --------------------------------------------------------------------------
+  // Cloud Firestore CRUD Operations
+  // --------------------------------------------------------------------------
+  async saveProduct(product: Omit<Product, 'id'> & { id?: string }): Promise<string> {
+    const path = `products/${product.id || 'new'}`;
+    try {
+      const id = product.id || `prod-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`;
+      const docRef = doc(db, 'products', id);
+      const dataToSave = {
         ...product,
+        id,
+        updatedAt: new Date().toISOString(),
+        createdAt: product.createdAt || new Date().toISOString()
+      };
+      await setDoc(docRef, dataToSave);
+      return id;
+    } catch (error) {
+      handleFirestoreError(error, OperationType.WRITE, path);
+      throw error;
+    }
+  },
+
+  async deleteProduct(id: string): Promise<void> {
+    const path = `products/${id}`;
+    try {
+      await deleteDoc(doc(db, 'products', id));
+    } catch (error) {
+      handleFirestoreError(error, OperationType.DELETE, path);
+      throw error;
+    }
+  },
+
+  async saveCategory(category: Category): Promise<void> {
+    const path = `categories/${category.id}`;
+    try {
+      await setDoc(doc(db, 'categories', category.id), {
+        ...category,
+        updatedAt: new Date().toISOString(),
+        createdAt: category.createdAt || new Date().toISOString()
+      });
+    } catch (error) {
+      handleFirestoreError(error, OperationType.WRITE, path);
+      throw error;
+    }
+  },
+
+  async deleteCategory(id: string): Promise<void> {
+    const path = `categories/${id}`;
+    try {
+      await deleteDoc(doc(db, 'categories', id));
+    } catch (error) {
+      handleFirestoreError(error, OperationType.DELETE, path);
+      throw error;
+    }
+  },
+
+  async saveHeroSlide(slide: HeroSlide): Promise<void> {
+    const path = `heroSlides/${slide.id}`;
+    try {
+      await setDoc(doc(db, 'heroSlides', slide.id), {
+        ...slide,
+        updatedAt: new Date().toISOString(),
+        createdAt: slide.createdAt || new Date().toISOString()
+      });
+    } catch (error) {
+      handleFirestoreError(error, OperationType.WRITE, path);
+      throw error;
+    }
+  },
+
+  async deleteHeroSlide(id: string): Promise<void> {
+    const path = `heroSlides/${id}`;
+    try {
+      await deleteDoc(doc(db, 'heroSlides', id));
+    } catch (error) {
+      handleFirestoreError(error, OperationType.DELETE, path);
+      throw error;
+    }
+  },
+
+  async saveHomepageContent(content: HomepageContent): Promise<void> {
+    const path = 'homepageContent/main';
+    try {
+      await setDoc(doc(db, 'homepageContent', 'main'), {
+        ...content,
         updatedAt: new Date().toISOString()
-      };
-      this.saveProducts(products);
+      });
+    } catch (error) {
+      handleFirestoreError(error, OperationType.WRITE, path);
+      throw error;
     }
   },
 
-  deleteProduct(id: string): void {
-    const products = this.getProducts().filter(p => p.id !== id);
-    this.saveProducts(products);
-  },
-
-  // --------------------------------------------------------------------------
-  // Categories Management
-  // --------------------------------------------------------------------------
-  getCategories(): Category[] {
-    const raw = localStorage.getItem(KEYS.CATEGORIES);
-    if (!raw) {
-      localStorage.setItem(KEYS.CATEGORIES, JSON.stringify(INITIAL_CATEGORIES));
-      return INITIAL_CATEGORIES;
-    }
+  async saveBusinessInfo(info: BusinessInfo): Promise<void> {
+    const path = 'businessInfo/main';
     try {
-      const parsed: Category[] = JSON.parse(raw);
-      return parsed.sort((a, b) => (a.order ?? 999) - (b.order ?? 999));
-    } catch {
-      return INITIAL_CATEGORIES;
+      await setDoc(doc(db, 'businessInfo', 'main'), {
+        ...info,
+        updatedAt: new Date().toISOString()
+      });
+    } catch (error) {
+      handleFirestoreError(error, OperationType.WRITE, path);
+      throw error;
     }
   },
 
-  saveCategories(categories: Category[]): void {
-    localStorage.setItem(KEYS.CATEGORIES, JSON.stringify(categories));
-  },
-
-  addCategory(name: string): Category {
-    const categories = this.getCategories();
-    const slug = name.toLowerCase().replace(/[^a-z0-9]+/g, '-');
-    const newCat: Category = {
-      id: `cat-${Date.now()}`,
-      name,
-      slug,
-      order: categories.length + 1
-    };
-    categories.push(newCat);
-    this.saveCategories(categories);
-    return newCat;
-  },
-
-  updateCategory(category: Category): void {
-    const categories = this.getCategories();
-    const index = categories.findIndex(c => c.id === category.id);
-    if (index !== -1) {
-      categories[index] = category;
-      this.saveCategories(categories);
-    }
-  },
-
-  deleteCategory(id: string): void {
-    const categories = this.getCategories().filter(c => c.id !== id);
-    this.saveCategories(categories);
-  },
-
-  // --------------------------------------------------------------------------
-  // Hero Slides Management
-  // --------------------------------------------------------------------------
-  getHeroSlides(): HeroSlide[] {
-    const raw = localStorage.getItem(KEYS.HERO_SLIDES);
-    if (!raw) {
-      localStorage.setItem(KEYS.HERO_SLIDES, JSON.stringify(INITIAL_HERO_SLIDES));
-      return INITIAL_HERO_SLIDES;
-    }
+  async saveWhatsAppSettings(settings: WhatsAppSettings): Promise<void> {
+    const path = 'settings/whatsapp';
     try {
-      const parsed: HeroSlide[] = JSON.parse(raw);
-      return parsed.sort((a, b) => (a.order ?? 999) - (b.order ?? 999));
-    } catch {
-      return INITIAL_HERO_SLIDES;
+      await setDoc(doc(db, 'settings', 'whatsapp'), {
+        ...settings,
+        updatedAt: new Date().toISOString()
+      });
+    } catch (error) {
+      handleFirestoreError(error, OperationType.WRITE, path);
+      throw error;
     }
   },
 
-  saveHeroSlides(slides: HeroSlide[]): void {
-    localStorage.setItem(KEYS.HERO_SLIDES, JSON.stringify(slides));
-  },
-
-  addHeroSlide(slide: Omit<HeroSlide, 'id'>): HeroSlide {
-    const slides = this.getHeroSlides();
-    const newSlide: HeroSlide = {
-      ...slide,
-      id: `slide-${Date.now()}`,
-      order: slides.length + 1
-    };
-    slides.push(newSlide);
-    this.saveHeroSlides(slides);
-    return newSlide;
-  },
-
-  updateHeroSlide(slide: HeroSlide): void {
-    const slides = this.getHeroSlides();
-    const index = slides.findIndex(s => s.id === slide.id);
-    if (index !== -1) {
-      slides[index] = slide;
-      this.saveHeroSlides(slides);
-    }
-  },
-
-  deleteHeroSlide(id: string): void {
-    const slides = this.getHeroSlides().filter(s => s.id !== id);
-    this.saveHeroSlides(slides);
-  },
-
-  // --------------------------------------------------------------------------
-  // Media Library Management (Both Images & Videos)
-  // --------------------------------------------------------------------------
-  getMediaItems(): MediaItem[] {
-    const raw = localStorage.getItem(KEYS.MEDIA_LIBRARY);
-    if (!raw) {
-      localStorage.setItem(KEYS.MEDIA_LIBRARY, JSON.stringify(INITIAL_MEDIA_ITEMS));
-      return INITIAL_MEDIA_ITEMS;
-    }
+  async addMediaItem(item: Omit<MediaItem, 'id' | 'createdAt'>): Promise<string> {
+    const id = `med-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`;
+    const path = `media/${id}`;
     try {
-      return JSON.parse(raw);
-    } catch {
-      return INITIAL_MEDIA_ITEMS;
+      await setDoc(doc(db, 'media', id), {
+        ...item,
+        id,
+        createdAt: new Date().toISOString()
+      });
+      return id;
+    } catch (error) {
+      handleFirestoreError(error, OperationType.WRITE, path);
+      throw error;
     }
   },
 
-  saveMediaItems(items: MediaItem[]): void {
-    localStorage.setItem(KEYS.MEDIA_LIBRARY, JSON.stringify(items));
-  },
-
-  addMediaItem(item: Omit<MediaItem, 'id' | 'createdAt'>): MediaItem {
-    const items = this.getMediaItems();
-    const newItem: MediaItem = {
-      ...item,
-      id: `med-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
-      createdAt: new Date().toISOString()
-    };
-    items.unshift(newItem);
-    this.saveMediaItems(items);
-    return newItem;
-  },
-
-  updateMediaItem(item: MediaItem): void {
-    const items = this.getMediaItems();
-    const idx = items.findIndex(m => m.id === item.id);
-    if (idx !== -1) {
-      items[idx] = item;
-      this.saveMediaItems(items);
-    }
-  },
-
-  deleteMediaItem(id: string): void {
-    const items = this.getMediaItems().filter(m => m.id !== id);
-    this.saveMediaItems(items);
-  },
-
-  // --------------------------------------------------------------------------
-  // Homepage Content & Media Placements
-  // --------------------------------------------------------------------------
-  getHomepageContent(): HomepageContent {
-    const raw = localStorage.getItem(KEYS.HOMEPAGE_CONTENT);
-    if (!raw) {
-      localStorage.setItem(KEYS.HOMEPAGE_CONTENT, JSON.stringify(INITIAL_HOMEPAGE_CONTENT));
-      return INITIAL_HOMEPAGE_CONTENT;
-    }
+  async deleteMediaItem(id: string): Promise<void> {
+    const path = `media/${id}`;
     try {
-      const parsed = JSON.parse(raw);
-      return { 
-        ...INITIAL_HOMEPAGE_CONTENT, 
-        ...parsed,
-        videoPlacements: parsed.videoPlacements && parsed.videoPlacements.length > 0 
-          ? parsed.videoPlacements 
-          : INITIAL_VIDEO_PLACEMENTS
-      };
-    } catch {
-      return INITIAL_HOMEPAGE_CONTENT;
+      await deleteDoc(doc(db, 'media', id));
+    } catch (error) {
+      handleFirestoreError(error, OperationType.DELETE, path);
+      throw error;
     }
   },
 
-  saveHomepageContent(content: HomepageContent): void {
-    localStorage.setItem(KEYS.HOMEPAGE_CONTENT, JSON.stringify(content));
-  },
-
-  updateHomepageBackground(background: {
-    url: string;
-    publicId?: string;
-    type: 'image' | 'video';
-    duration?: number;
-    settings?: { autoplay: boolean; muted: boolean; loop: boolean; controls: boolean };
-  }): void {
-    const current = this.getHomepageContent();
-    if (background.type === 'video') {
-      current.homepageBackgroundType = 'video';
-      current.homepageBackgroundVideo = background.url;
-      current.homepageBackgroundVideoDuration = background.duration;
-      if (background.settings) {
-        current.homepageBackgroundVideoSettings = background.settings;
+  // --------------------------------------------------------------------------
+  // Seed / Migration Utility (Imports Default Inventory into Firestore once)
+  // --------------------------------------------------------------------------
+  async seedInitialDataIfEmpty(): Promise<boolean> {
+    try {
+      const prodSnap = await getDocs(collection(db, 'products'));
+      if (!prodSnap.empty) {
+        return false; // Already populated
       }
-    } else {
-      current.homepageBackgroundType = 'image';
-      current.homepageBackgroundImage = background.url;
-      current.homepageBackgroundPublicId = background.publicId;
-    }
-    this.saveHomepageContent(current);
-  },
 
-  // --------------------------------------------------------------------------
-  // Business Information
-  // --------------------------------------------------------------------------
-  getBusinessInfo(): BusinessInfo {
-    const raw = localStorage.getItem(KEYS.BUSINESS_INFO);
-    if (!raw) {
-      localStorage.setItem(KEYS.BUSINESS_INFO, JSON.stringify(INITIAL_BUSINESS_INFO));
-      return INITIAL_BUSINESS_INFO;
-    }
-    try {
-      return JSON.parse(raw);
-    } catch {
-      return INITIAL_BUSINESS_INFO;
-    }
-  },
+      console.log('Seeding initial Ankobeng Motors catalog into Cloud Firestore...');
+      const batch = writeBatch(db);
 
-  saveBusinessInfo(info: BusinessInfo): void {
-    localStorage.setItem(KEYS.BUSINESS_INFO, JSON.stringify(info));
-  },
+      // 1. Products
+      INITIAL_PRODUCTS.forEach((p) => {
+        const ref = doc(db, 'products', p.id);
+        batch.set(ref, p);
+      });
 
-  // --------------------------------------------------------------------------
-  // Reset Defaults
-  // --------------------------------------------------------------------------
-  resetAll(): void {
-    localStorage.setItem(KEYS.PRODUCTS, JSON.stringify(INITIAL_PRODUCTS));
-    localStorage.setItem(KEYS.CATEGORIES, JSON.stringify(INITIAL_CATEGORIES));
-    localStorage.setItem(KEYS.HERO_SLIDES, JSON.stringify(INITIAL_HERO_SLIDES));
-    localStorage.setItem(KEYS.BUSINESS_INFO, JSON.stringify(INITIAL_BUSINESS_INFO));
-    localStorage.setItem(KEYS.HOMEPAGE_CONTENT, JSON.stringify(INITIAL_HOMEPAGE_CONTENT));
-    localStorage.setItem(KEYS.WHATSAPP_SETTINGS, JSON.stringify(INITIAL_WHATSAPP_SETTINGS));
-    localStorage.setItem(KEYS.MEDIA_LIBRARY, JSON.stringify(INITIAL_MEDIA_ITEMS));
+      // 2. Categories
+      INITIAL_CATEGORIES.forEach((c) => {
+        const ref = doc(db, 'categories', c.id);
+        batch.set(ref, c);
+      });
+
+      // 3. Hero Slides
+      INITIAL_HERO_SLIDES.forEach((s) => {
+        const ref = doc(db, 'heroSlides', s.id);
+        batch.set(ref, s);
+      });
+
+      // 4. Homepage Content
+      const hpRef = doc(db, 'homepageContent', 'main');
+      batch.set(hpRef, INITIAL_HOMEPAGE_CONTENT);
+
+      // 5. Business Info
+      const bizRef = doc(db, 'businessInfo', 'main');
+      batch.set(bizRef, INITIAL_BUSINESS_INFO);
+
+      // 6. WhatsApp Settings
+      const waRef = doc(db, 'settings', 'whatsapp');
+      batch.set(waRef, INITIAL_WHATSAPP_SETTINGS);
+
+      // 7. Initial Media Items
+      INITIAL_MEDIA_ITEMS.forEach((m) => {
+        const ref = doc(db, 'media', m.id);
+        batch.set(ref, m);
+      });
+
+      await batch.commit();
+      console.log('Initial catalog seeded successfully.');
+      return true;
+    } catch (err) {
+      console.warn('Initial seeding check:', err);
+      return false;
+    }
   }
 };
 
-export const openWhatsAppOrder = (productName?: string): void => {
-  const url = dataService.getWhatsAppOrderUrl(productName);
+export const openWhatsAppOrder = (productName?: string, currentSettings?: WhatsAppSettings): void => {
+  const url = dataService.getWhatsAppOrderUrl(productName, currentSettings);
   try {
     const win = window.open(url, '_blank', 'noopener,noreferrer');
     if (!win || win.closed || typeof win.closed === 'undefined') {

@@ -1,0 +1,98 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Helper functions for zero-trust authentication & authorization
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    // Explicitly designated root bootstrap administrator email
+    function isDesignatedAdminEmail() {
+      return isSignedIn() &&
+        request.auth.token.email != null &&
+        request.auth.token.email.lower() in [
+          '10362581@upsamail.edu.gh'
+        ];
+    }
+
+    // Verified admin document check (requires active role field 'admin')
+    function hasAdminDoc() {
+      return isSignedIn() &&
+        exists(/databases/$(database)/documents/admins/$(request.auth.uid)) &&
+        get(/databases/$(database)/documents/admins/$(request.auth.uid)).data.role == 'admin';
+    }
+
+    // Unified Administrator authorization boundary
+    function isAdmin() {
+      return isDesignatedAdminEmail() || hasAdminDoc();
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() > 0 && id.size() <= 128;
+    }
+
+    // ------------------------------------------------------------------------
+    // Admins Collection: Strict Privilege-Escalation Prevention
+    // - Ordinary authenticated users cannot create, edit, or delete any admin doc.
+    // - Only the designated root administrator email can manage /admins docs.
+    // - Authenticated users can only read their own record to verify permissions.
+    // ------------------------------------------------------------------------
+    match /admins/{adminUid} {
+      allow read: if isSignedIn() && (request.auth.uid == adminUid || isDesignatedAdminEmail());
+      allow create, update, delete: if isDesignatedAdminEmail() && isValidId(adminUid);
+    }
+
+    // ------------------------------------------------------------------------
+    // Public CMS Content Collections (Public Read, Admin Write)
+    // ------------------------------------------------------------------------
+
+    // Products collection: All inventory items
+    match /products/{productId} {
+      allow read: if true;
+      allow create, update, delete: if isAdmin() && isValidId(productId);
+    }
+
+    // Categories collection
+    match /categories/{categoryId} {
+      allow read: if true;
+      allow create, update, delete: if isAdmin() && isValidId(categoryId);
+    }
+
+    // Hero Slides collection
+    match /heroSlides/{slideId} {
+      allow read: if true;
+      allow create, update, delete: if isAdmin() && isValidId(slideId);
+    }
+
+    // Homepage Content document
+    match /homepageContent/{docId} {
+      allow read: if true;
+      allow create, update, delete: if isAdmin() && isValidId(docId);
+    }
+
+    // Media Library metadata
+    match /media/{mediaId} {
+      allow read: if true;
+      allow create, update, delete: if isAdmin() && isValidId(mediaId);
+    }
+
+    // Business Information (Address, Phone numbers, Owner)
+    match /businessInfo/{docId} {
+      allow read: if true;
+      allow create, update, delete: if isAdmin() && isValidId(docId);
+    }
+
+    // Settings (WhatsApp ordering configuration)
+    match /settings/{docId} {
+      allow read: if true;
+      allow create, update, delete: if isAdmin() && isValidId(docId);
+    }
+
+    // Global default-deny for all other arbitrary paths
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

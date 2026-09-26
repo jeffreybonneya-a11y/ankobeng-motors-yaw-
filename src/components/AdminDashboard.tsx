@@ -1,4 +1,4 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { 
   X, Plus, Edit2, Trash2, Check, Star, 
   Layers, Image as ImageIcon, Building, RefreshCw, Download, 
@@ -6,8 +6,10 @@ import {
   AlertCircle, FileUp, MessageSquare, LayoutDashboard, 
   Sliders, ArrowUp, ArrowDown, Copy, ExternalLink, Sparkles,
   Phone, Smartphone, Search, Film, Play, Video, Volume2, 
-  VolumeX, RotateCcw, MonitorPlay, SlidersHorizontal, CheckSquare
+  VolumeX, RotateCcw, MonitorPlay, SlidersHorizontal, CheckSquare,
+  User as UserIcon, Database, Cloud
 } from 'lucide-react';
+import { User } from 'firebase/auth';
 import { 
   Product, 
   Category, 
@@ -18,7 +20,12 @@ import {
   WhatsAppSettings,
   VideoPlacementConfig 
 } from '../types';
-import { dataService, cleanProductNameFromFileName, STOREFRONT_IMAGE, STOREFRONT_IMAGE_INTERIOR } from '../services/dataService';
+import { 
+  dataService, 
+  cleanProductNameFromFileName, 
+  STOREFRONT_IMAGE, 
+  STOREFRONT_IMAGE_INTERIOR 
+} from '../services/dataService';
 import { 
   uploadToCloudinary, 
   CLOUDINARY_CONFIG, 
@@ -52,12 +59,15 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   onDataChanged,
   isStandalonePage = false
 }) => {
-  // Authentication State
-  const [isAuthenticated, setIsAuthenticated] = useState<boolean>(() => dataService.isAdminAuthenticated());
-  const [passcodeInput, setPasscodeInput] = useState('');
-  const [showPasscode, setShowPasscode] = useState(false);
+  // Firebase Authentication State
+  const [currentUser, setCurrentUser] = useState<User | null>(() => dataService.getCurrentUser());
+  const [isAdminAuthorized, setIsAdminAuthorized] = useState<boolean>(false);
+  const [authLoading, setAuthLoading] = useState<boolean>(true);
+  const [emailInput, setEmailInput] = useState('10362581@upsamail.edu.gh');
+  const [passwordInput, setPasswordInput] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
   const [authError, setAuthError] = useState('');
-  const [rememberMe, setRememberMe] = useState(true);
+  const [isSubmittingAuth, setIsSubmittingAuth] = useState(false);
 
   // Tabs
   type TabKey = 
@@ -77,18 +87,38 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   // Status banners & feedback
   const [actionSuccess, setActionSuccess] = useState<string>('');
   const [actionError, setActionError] = useState<string>('');
+  const [isSavingToFirestore, setIsSavingToFirestore] = useState(false);
+  
   const showFeedback = (msg: string, isError = false) => {
     if (isError) {
       setActionError(msg);
-      setTimeout(() => setActionError(''), 5000);
+      setTimeout(() => setActionError(''), 6000);
     } else {
       setActionSuccess(msg);
       setTimeout(() => setActionSuccess(''), 3500);
     }
   };
 
+  // Monitor Firebase Auth state
+  useEffect(() => {
+    const unsub = dataService.onAuthChange(async (user) => {
+      setCurrentUser(user);
+      if (user) {
+        const isAdm = await dataService.isUserAdmin(user);
+        setIsAdminAuthorized(isAdm);
+        if (!isAdm) {
+          setAuthError(`User ${user.email || user.uid} is not authorized as an administrator.`);
+        }
+      } else {
+        setIsAdminAuthorized(false);
+      }
+      setAuthLoading(false);
+    });
+    return () => unsub();
+  }, []);
+
   // ----------------------------------------------------
-  // SECTION 2: PRODUCTS STATE
+  // PRODUCTS STATE
   // ----------------------------------------------------
   const [productSearch, setProductSearch] = useState('');
   const [productCategoryFilter, setProductCategoryFilter] = useState('ALL');
@@ -129,14 +159,14 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const productVideoInputRef = useRef<HTMLInputElement>(null);
 
   // ----------------------------------------------------
-  // SECTION 3: CATEGORIES STATE
+  // CATEGORIES STATE
   // ----------------------------------------------------
   const [newCategoryName, setNewCategoryName] = useState('');
   const [editingCategoryId, setEditingCategoryId] = useState<string | null>(null);
   const [editingCategoryName, setEditingCategoryName] = useState('');
 
   // ----------------------------------------------------
-  // SECTION 5: HERO SLIDESHOW STATE
+  // HERO SLIDESHOW STATE
   // ----------------------------------------------------
   const [isEditingSlide, setIsEditingSlide] = useState(false);
   const [slideForm, setSlideForm] = useState<{
@@ -163,14 +193,18 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const heroFileInputRef = useRef<HTMLInputElement>(null);
 
   // ----------------------------------------------------
-  // SECTION 6: HOMEPAGE CONTENT & BACKGROUND STATE
+  // HOMEPAGE CONTENT & BACKGROUND STATE
   // ----------------------------------------------------
   const [homepageForm, setHomepageForm] = useState<HomepageContent>({ ...homepageContent });
   const bgImageInputRef = useRef<HTMLInputElement>(null);
   const bgVideoInputRef = useRef<HTMLInputElement>(null);
 
+  useEffect(() => {
+    setHomepageForm({ ...homepageContent });
+  }, [homepageContent]);
+
   // ----------------------------------------------------
-  // SECTION 7: MEDIA LIBRARY (IMAGES & VIDEOS) STATE
+  // MEDIA LIBRARY (IMAGES & VIDEOS) STATE
   // ----------------------------------------------------
   const [mediaSearch, setMediaSearch] = useState('');
   const [mediaTypeFilter, setMediaTypeFilter] = useState<'all' | 'image' | 'video'>('all');
@@ -179,45 +213,71 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const mediaFileInputRef = useRef<HTMLInputElement>(null);
 
   // ----------------------------------------------------
-  // SECTION 8: BUSINESS INFORMATION STATE
+  // BUSINESS INFORMATION STATE
   // ----------------------------------------------------
   const [businessForm, setBusinessForm] = useState<BusinessInfo>({ ...businessInfo });
+  useEffect(() => {
+    setBusinessForm({ ...businessInfo });
+  }, [businessInfo]);
 
   // ----------------------------------------------------
-  // SECTION 9: WHATSAPP SETTINGS STATE
+  // WHATSAPP SETTINGS STATE
   // ----------------------------------------------------
   const [whatsappForm, setWhatsappForm] = useState<WhatsAppSettings>({ ...whatsappSettings });
+  useEffect(() => {
+    setWhatsappForm({ ...whatsappSettings });
+  }, [whatsappSettings]);
 
   // ----------------------------------------------------
-  // AUTHENTICATION SUBMISSION (Passcode = yaw)
+  // FIREBASE AUTHENTICATION HANDLERS
   // ----------------------------------------------------
-  const handleLogin = (e: React.FormEvent) => {
+  const handleEmailPasswordLogin = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (dataService.verifyAdminPasscode(passcodeInput)) {
-      dataService.setAdminAuthenticated(true, rememberMe);
-      setIsAuthenticated(true);
-      setAuthError('');
-      showFeedback('Authenticated as Ankobeng Motors Administrator.');
-    } else {
-      setAuthError('Invalid passcode. Please enter the correct admin passcode.');
+    setAuthError('');
+    setIsSubmittingAuth(true);
+    try {
+      await dataService.loginWithEmailPassword(emailInput, passwordInput);
+      showFeedback('Signed in securely with Firebase Authentication.');
+    } catch (err: any) {
+      console.error('Firebase Auth error:', err);
+      setAuthError(err.message || 'Firebase authentication failed. Please verify credentials.');
+    } finally {
+      setIsSubmittingAuth(false);
     }
   };
 
-  const handleLogout = () => {
-    dataService.logoutAdmin();
-    setIsAuthenticated(false);
-    setPasscodeInput('');
+  const handleGoogleLogin = async () => {
+    setAuthError('');
+    setIsSubmittingAuth(true);
+    try {
+      await dataService.loginWithGoogle();
+      showFeedback('Signed in successfully with Google Admin Account.');
+    } catch (err: any) {
+      console.error('Google Sign-in error:', err);
+      setAuthError(err.message || 'Google sign-in was cancelled or encountered an error.');
+    } finally {
+      setIsSubmittingAuth(false);
+    }
+  };
+
+  const handleLogout = async () => {
+    try {
+      await dataService.logoutAdmin();
+      showFeedback('Signed out from Firebase Admin Portal.');
+    } catch (err: any) {
+      showFeedback(err.message || 'Error signing out', true);
+    }
   };
 
   // ----------------------------------------------------
-  // GENERIC MEDIA UPLOAD (Local Computer -> Cloudinary)
+  // MEDIA UPLOAD TO CLOUDINARY + FIRESTORE METADATA
   // ----------------------------------------------------
   const handleUploadMediaFile = async (e: React.ChangeEvent<HTMLInputElement>, targetLocation?: string) => {
     const files = e.target.files;
     if (!files || files.length === 0) return;
 
     setIsUploadingMedia(true);
-    setUploadProgressText('Uploading media to Cloudinary...');
+    setUploadProgressText('Uploading media asset to Cloudinary CDN...');
 
     try {
       let count = 0;
@@ -226,10 +286,10 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         const isVid = isVideoFile(file);
 
         if (isVid) {
-          setUploadProgressText(`Validating video ${file.name} (Max 1m 30s)...`);
+          setUploadProgressText(`Validating video ${file.name} (Strict 50s limit)...`);
           const duration = await getVideoDuration(file);
           if (duration > MAX_VIDEO_DURATION_SECONDS) {
-            throw new Error(`Video "${file.name}" is ${Math.round(duration)} seconds long, which exceeds the 1 min 30 secs (90-second) maximum limit.`);
+            throw new Error(`Video "${file.name}" is ${Math.round(duration)}s long, which exceeds the strict 50-second maximum limit.`);
           }
           setUploadProgressText(`Uploading video "${file.name}" to Cloudinary...`);
         } else {
@@ -238,7 +298,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
         const res = await uploadToCloudinary(file, file.name);
 
-        dataService.addMediaItem({
+        // Save metadata directly to Cloud Firestore collection 'media'
+        await dataService.addMediaItem({
           url: res.secureUrl,
           publicId: res.publicId,
           originalFilename: res.originalFilename,
@@ -254,8 +315,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         count++;
       }
 
-      onDataChanged();
-      showFeedback(`Successfully uploaded ${count} media asset(s) to Cloudinary!`);
+      showFeedback(`Successfully uploaded ${count} media asset(s) and saved to Firestore!`);
     } catch (err: any) {
       showFeedback(err.message || 'Upload failed.', true);
     } finally {
@@ -279,14 +339,14 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       if (isVideo) {
         const duration = await getVideoDuration(file);
         if (duration > MAX_VIDEO_DURATION_SECONDS) {
-          throw new Error(`Background video duration is ${Math.round(duration)}s (Maximum allowed is 1 min 30 secs / 90 seconds).`);
+          throw new Error(`Background video duration is ${Math.round(duration)}s (Maximum allowed is strictly 50 seconds).`);
         }
       }
 
       const res = await uploadToCloudinary(file, file.name);
 
-      // Add to media library
-      const media = dataService.addMediaItem({
+      // Save to media library in Firestore
+      await dataService.addMediaItem({
         url: res.secureUrl,
         publicId: res.publicId,
         originalFilename: res.originalFilename,
@@ -299,28 +359,26 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       });
 
       if (isVideo) {
-        const updated = {
+        const updated: HomepageContent = {
           ...homepageForm,
-          homepageBackgroundType: 'video' as const,
+          homepageBackgroundType: 'video',
           homepageBackgroundVideo: res.secureUrl,
           homepageBackgroundVideoDuration: res.duration
         };
         setHomepageForm(updated);
-        dataService.saveHomepageContent(updated);
-        showFeedback('Uploaded and applied Homepage Background Video!');
+        await dataService.saveHomepageContent(updated);
+        showFeedback('Uploaded and saved Homepage Background Video to Firestore!');
       } else {
-        const updated = {
+        const updated: HomepageContent = {
           ...homepageForm,
-          homepageBackgroundType: 'image' as const,
+          homepageBackgroundType: 'image',
           homepageBackgroundImage: res.secureUrl,
           homepageBackgroundPublicId: res.publicId
         };
         setHomepageForm(updated);
-        dataService.saveHomepageContent(updated);
-        showFeedback('Uploaded and applied Homepage Background Image!');
+        await dataService.saveHomepageContent(updated);
+        showFeedback('Uploaded and saved Homepage Background Image to Firestore!');
       }
-
-      onDataChanged();
     } catch (err: any) {
       showFeedback(err.message || 'Failed to upload background media.', true);
     } finally {
@@ -357,8 +415,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         newImages.push(res.secureUrl);
         newDetails.push({ url: res.secureUrl, publicId: res.publicId });
 
-        // Add to global media library
-        dataService.addMediaItem({
+        // Save media metadata to Firestore
+        await dataService.addMediaItem({
           url: res.secureUrl,
           publicId: res.publicId,
           originalFilename: res.originalFilename,
@@ -376,7 +434,6 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         imageDetails: newDetails
       });
 
-      onDataChanged();
       showFeedback('Product images uploaded to Cloudinary successfully!');
     } catch (err: any) {
       showFeedback(err.message || 'Image upload failed.', true);
@@ -387,23 +444,23 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     }
   };
 
-  // Product Video Upload (e.g. running engine or inspection clip)
+  // Product Video Upload (max 50s)
   const handleProductVideoUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
 
     setIsUploadingToCloudinary(true);
-    setUploadProgressText('Uploading product demonstration video to Cloudinary...');
+    setUploadProgressText('Uploading product demonstration video (Max 50s)...');
 
     try {
       const duration = await getVideoDuration(file);
       if (duration > MAX_VIDEO_DURATION_SECONDS) {
-        throw new Error(`Video is ${Math.round(duration)}s long. Maximum allowed is 1 min 30 secs (90 seconds).`);
+        throw new Error(`Video is ${Math.round(duration)}s long. Maximum allowed is 50 seconds.`);
       }
 
       const res = await uploadToCloudinary(file, file.name);
 
-      dataService.addMediaItem({
+      await dataService.addMediaItem({
         url: res.secureUrl,
         publicId: res.publicId,
         originalFilename: res.originalFilename,
@@ -422,7 +479,6 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         videoDuration: res.duration
       });
 
-      onDataChanged();
       showFeedback('Product video clip uploaded and attached!');
     } catch (err: any) {
       showFeedback(err.message || 'Video upload failed.', true);
@@ -433,11 +489,11 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     }
   };
 
-  // Save / Update Product
-  const handleSaveProduct = (e: React.FormEvent) => {
+  // Save / Update Product directly to Cloud Firestore
+  const handleSaveProduct = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!productForm.name.trim()) {
-      showFeedback('Please provide a product name.', true);
+      showFeedback('Please provide an exact product name.', true);
       return;
     }
     if (productForm.images.length === 0) {
@@ -445,29 +501,10 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       return;
     }
 
-    if (productForm.id) {
-      const existing = dataService.getProductById(productForm.id);
-      if (existing) {
-        dataService.updateProduct({
-          ...existing,
-          name: productForm.name.trim(),
-          category: productForm.category,
-          images: productForm.images,
-          imageDetails: productForm.imageDetails,
-          videoUrl: productForm.videoUrl || undefined,
-          videoPublicId: productForm.videoPublicId || undefined,
-          videoDuration: productForm.videoDuration || undefined,
-          fitment: productForm.fitment.trim(),
-          condition: productForm.condition,
-          availability: productForm.availability,
-          description: productForm.description.trim(),
-          application: productForm.application.trim(),
-          featured: productForm.featured
-        });
-        showFeedback(`Product "${productForm.name}" updated successfully!`);
-      }
-    } else {
-      dataService.addProduct({
+    setIsSavingToFirestore(true);
+    try {
+      await dataService.saveProduct({
+        id: productForm.id,
         name: productForm.name.trim(),
         category: productForm.category,
         images: productForm.images,
@@ -480,13 +517,27 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         availability: productForm.availability,
         description: productForm.description.trim(),
         application: productForm.application.trim(),
-        featured: productForm.featured
+        featured: productForm.featured,
+        order: products.length + 1
       });
-      showFeedback(`Product "${productForm.name}" created and published!`);
-    }
 
-    setIsEditingProduct(false);
-    onDataChanged();
+      showFeedback(`Product "${productForm.name}" saved directly to Cloud Firestore!`);
+      setIsEditingProduct(false);
+    } catch (err: any) {
+      showFeedback(err.message || 'Failed to save product to Firestore.', true);
+    } finally {
+      setIsSavingToFirestore(false);
+    }
+  };
+
+  const handleDeleteProduct = async (id: string, name: string) => {
+    if (!window.confirm(`Are you sure you want to delete "${name}" from Cloud Firestore?`)) return;
+    try {
+      await dataService.deleteProduct(id);
+      showFeedback(`Product "${name}" deleted from Cloud Firestore.`);
+    } catch (err: any) {
+      showFeedback(err.message || 'Failed to delete product from Firestore.', true);
+    }
   };
 
   // ----------------------------------------------------
@@ -497,20 +548,20 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     if (!file) return;
 
     setIsUploadingToCloudinary(true);
-    setUploadProgressText('Uploading hero media to Cloudinary...');
+    setUploadProgressText('Uploading hero media to Cloudinary (Max 50s for video)...');
 
     try {
       const isVid = isVideoFile(file);
       if (isVid) {
         const duration = await getVideoDuration(file);
         if (duration > MAX_VIDEO_DURATION_SECONDS) {
-          throw new Error(`Video is ${Math.round(duration)}s long (Max limit is 1 min 30 secs / 90 seconds).`);
+          throw new Error(`Video is ${Math.round(duration)}s long (Max limit is 50 seconds).`);
         }
       }
 
       const res = await uploadToCloudinary(file, file.name);
 
-      dataService.addMediaItem({
+      await dataService.addMediaItem({
         url: res.secureUrl,
         publicId: res.publicId,
         originalFilename: res.originalFilename,
@@ -531,7 +582,6 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         videoDuration: res.duration
       });
 
-      onDataChanged();
       showFeedback('Hero media uploaded to Cloudinary successfully!');
     } catch (err: any) {
       showFeedback(err.message || 'Media upload failed.', true);
@@ -542,7 +592,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     }
   };
 
-  const handleSaveHeroSlide = (e: React.FormEvent) => {
+  const handleSaveHeroSlide = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!slideForm.title.trim()) {
       showFeedback('Please provide a slide title.', true);
@@ -553,9 +603,11 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       return;
     }
 
-    if (slideForm.id) {
-      dataService.updateHeroSlide({
-        id: slideForm.id,
+    setIsSavingToFirestore(true);
+    try {
+      const slideId = slideForm.id || `slide-${Date.now()}`;
+      await dataService.saveHeroSlide({
+        id: slideId,
         title: slideForm.title.trim(),
         subtitle: slideForm.subtitle.trim(),
         badge: slideForm.badge.trim() || 'SHOP DOOR E-3',
@@ -565,46 +617,37 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         videoUrl: slideForm.videoUrl,
         videoDuration: slideForm.videoDuration,
         description: slideForm.description.trim(),
-        active: slideForm.active
+        active: slideForm.active,
+        order: heroSlides.length + 1
       });
-      showFeedback('Hero slide updated successfully!');
-    } else {
-      dataService.addHeroSlide({
-        title: slideForm.title.trim(),
-        subtitle: slideForm.subtitle.trim(),
-        badge: slideForm.badge.trim() || 'SHOP DOOR E-3',
-        image: slideForm.image,
-        publicId: slideForm.publicId,
-        mediaType: slideForm.mediaType || 'image',
-        videoUrl: slideForm.videoUrl,
-        videoDuration: slideForm.videoDuration,
-        description: slideForm.description.trim(),
-        active: slideForm.active
-      });
-      showFeedback('New hero slide created!');
+      showFeedback('Hero slide saved to Cloud Firestore!');
+      setIsEditingSlide(false);
+    } catch (err: any) {
+      showFeedback(err.message || 'Failed to save slide to Firestore.', true);
+    } finally {
+      setIsSavingToFirestore(false);
     }
-
-    setIsEditingSlide(false);
-    onDataChanged();
   };
 
   // ----------------------------------------------------
-  // VIDEO PLACEMENTS SAVE & TOGGLE
+  // VIDEO PLACEMENTS SAVE
   // ----------------------------------------------------
-  const handleSavePlacement = (placement: VideoPlacementConfig) => {
+  const handleSavePlacement = async (placement: VideoPlacementConfig) => {
     const placements = homepageForm.videoPlacements || [];
     const idx = placements.findIndex(p => p.id === placement.id);
-    let updated: VideoPlacementConfig[];
+    let updatedPlacements: VideoPlacementConfig[];
     if (idx !== -1) {
-      updated = [...placements];
-      updated[idx] = placement;
+      updatedPlacements = [...placements];
+      updatedPlacements[idx] = placement;
     } else {
-      updated = [...placements, placement];
+      updatedPlacements = [...placements, placement];
     }
 
-    const newHomepage = { ...homepageForm, videoPlacements: updated };
+    const newHomepage: HomepageContent = { 
+      ...homepageForm, 
+      videoPlacements: updatedPlacements 
+    };
     
-    // Also sync specific section properties for convenience
     if (placement.id === 'homepage-bg') {
       newHomepage.homepageBackgroundType = placement.enabled && placement.videoUrl ? 'video' : 'image';
       newHomepage.homepageBackgroundVideo = placement.videoUrl;
@@ -630,15 +673,29 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     }
 
     setHomepageForm(newHomepage);
-    dataService.saveHomepageContent(newHomepage);
-    onDataChanged();
-    showFeedback(`Saved configuration for "${placement.name}"!`);
+    try {
+      await dataService.saveHomepageContent(newHomepage);
+      showFeedback(`Saved configuration for "${placement.name}" to Cloud Firestore!`);
+    } catch (err: any) {
+      showFeedback(err.message || 'Failed to update placement in Firestore.', true);
+    }
   };
 
   // ----------------------------------------------------
-  // 1. RENDER LOGIN SCREEN IF UNAUTHENTICATED
+  // 1. RENDER FIREBASE LOGIN SCREEN IF UNAUTHENTICATED
   // ----------------------------------------------------
-  if (!isAuthenticated) {
+  if (authLoading) {
+    return (
+      <div className="min-h-screen bg-[#080b14] flex items-center justify-center p-4">
+        <div className="flex items-center gap-3 text-[#d4ff32] font-mono text-xs animate-pulse">
+          <RefreshCw className="w-5 h-5 animate-spin" />
+          <span>Verifying Firebase Authentication...</span>
+        </div>
+      </div>
+    );
+  }
+
+  if (!currentUser) {
     return (
       <div className="min-h-screen bg-[#080b14] flex items-center justify-center p-4 selection:bg-[#d4ff32] selection:text-[#080b14]">
         <div className="w-full max-w-md bg-[#0d1222] border border-[#273153] rounded-2xl shadow-2xl p-6 sm:p-8 space-y-6">
@@ -650,7 +707,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
               STORE MANAGEMENT PORTAL
             </h2>
             <p className="text-xs font-mono text-slate-400">
-              {businessInfo.name} • {businessInfo.location}
+              Firebase Cloud Authentication &amp; Firestore CMS
             </p>
           </div>
 
@@ -661,43 +718,60 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
             </div>
           )}
 
-          <form onSubmit={handleLogin} className="space-y-4 font-mono text-xs">
+          {/* Google Sign-in One-Click Option */}
+          <button
+            type="button"
+            onClick={handleGoogleLogin}
+            disabled={isSubmittingAuth}
+            className="w-full py-3 px-4 bg-[#13192f] hover:bg-[#18203d] text-white border border-[#273153] hover:border-[#d4ff32]/60 rounded-xl font-mono text-xs font-bold transition-all flex items-center justify-center gap-2.5 cursor-pointer shadow-sm disabled:opacity-50"
+          >
+            <Cloud className="w-4 h-4 text-[#d4ff32]" />
+            <span>Sign In with Google Admin Account</span>
+          </button>
+
+          <div className="relative flex py-1 items-center">
+            <div className="flex-grow border-t border-[#273153]"></div>
+            <span className="flex-shrink mx-3 text-[10px] text-slate-500 font-mono uppercase">or email &amp; password</span>
+            <div className="flex-grow border-t border-[#273153]"></div>
+          </div>
+
+          <form onSubmit={handleEmailPasswordLogin} className="space-y-4 font-mono text-xs">
             <div>
               <label className="block text-slate-300 font-bold uppercase mb-1.5">
-                Admin Passcode:
+                Admin Email:
+              </label>
+              <input
+                type="email"
+                value={emailInput}
+                onChange={(e) => setEmailInput(e.target.value)}
+                placeholder="admin@ankobengmotors.com"
+                className="w-full bg-[#13192f] border border-[#273153] focus:border-[#d4ff32] rounded-lg px-3.5 py-2.5 text-white font-mono text-xs outline-none transition-colors"
+                required
+              />
+            </div>
+
+            <div>
+              <label className="block text-slate-300 font-bold uppercase mb-1.5">
+                Password:
               </label>
               <div className="relative">
                 <input
-                  type={showPasscode ? 'text' : 'password'}
-                  value={passcodeInput}
-                  onChange={(e) => setPasscodeInput(e.target.value)}
-                  placeholder="Enter passcode (yaw)"
-                  className="w-full bg-[#13192f] border border-[#273153] focus:border-[#d4ff32] rounded-lg px-3.5 py-2.5 text-white font-mono text-sm tracking-wider outline-none transition-colors"
-                  autoFocus
+                  type={showPassword ? 'text' : 'password'}
+                  value={passwordInput}
+                  onChange={(e) => setPasswordInput(e.target.value)}
+                  placeholder="Enter administrator password"
+                  className="w-full bg-[#13192f] border border-[#273153] focus:border-[#d4ff32] rounded-lg px-3.5 py-2.5 text-white font-mono text-xs outline-none transition-colors"
                   required
                 />
                 <button
                   type="button"
-                  onClick={() => setShowPasscode(!showPasscode)}
+                  onClick={() => setShowPassword(!showPassword)}
                   className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-white cursor-pointer"
                   tabIndex={-1}
                 >
-                  {showPasscode ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                  {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
                 </button>
               </div>
-            </div>
-
-            <div className="flex items-center justify-between text-[11px] text-slate-400">
-              <label className="flex items-center gap-2 cursor-pointer">
-                <input
-                  type="checkbox"
-                  checked={rememberMe}
-                  onChange={(e) => setRememberMe(e.target.checked)}
-                  className="rounded border-[#273153] bg-[#13192f] text-[#d4ff32] focus:ring-0"
-                />
-                <span>Remember session</span>
-              </label>
-              <span className="text-slate-500">Shop Door E-3</span>
             </div>
 
             <div className="pt-2 flex flex-col gap-2">
@@ -711,31 +785,70 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                 </button>
                 <button
                   type="submit"
-                  className="w-1/2 py-2.5 bg-[#d4ff32] hover:bg-[#c1ec25] text-[#080b14] font-extrabold uppercase rounded-lg transition-colors cursor-pointer flex items-center justify-center gap-1.5"
+                  disabled={isSubmittingAuth}
+                  className="w-1/2 py-2.5 bg-[#d4ff32] hover:bg-[#c1ec25] text-[#080b14] font-extrabold uppercase rounded-lg transition-colors cursor-pointer flex items-center justify-center gap-1.5 disabled:opacity-50"
                 >
                   <Lock className="w-3.5 h-3.5" />
-                  <span>Unlock Portal</span>
+                  <span>{isSubmittingAuth ? 'Signing in...' : 'Sign In'}</span>
                 </button>
               </div>
-
-              {/* Quick Unlock */}
-              <button
-                type="button"
-                onClick={() => {
-                  dataService.setAdminAuthenticated(true, true);
-                  setIsAuthenticated(true);
-                  showFeedback('Unlocked Admin Dashboard as Store Manager.');
-                }}
-                className="w-full py-2 bg-[#080b14] hover:bg-[#13192f] text-slate-400 hover:text-[#d4ff32] border border-[#273153] hover:border-[#d4ff32]/50 rounded-lg text-[11px] font-mono transition-colors flex items-center justify-center gap-1.5 cursor-pointer"
-              >
-                <Shield className="w-3 h-3 text-[#d4ff32]" />
-                <span>Instant Unlock (Manager / Development Access)</span>
-              </button>
             </div>
           </form>
 
-          <div className="pt-4 border-t border-[#273153] text-center text-[10px] text-slate-500 font-mono">
-            Admin Passcode: <span className="text-[#d4ff32] font-bold">yaw</span>
+          <div className="pt-4 border-t border-[#273153] text-center text-[10px] text-slate-400 font-mono">
+            Direct Cloud Firestore Persistence Active • Shop Door E-3
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // Unauthorized access guard: Authenticated user is not an administrator
+  if (!isAdminAuthorized) {
+    return (
+      <div className="min-h-screen bg-[#080b14] flex items-center justify-center p-4 selection:bg-[#d4ff32] selection:text-[#080b14]">
+        <div className="w-full max-w-md bg-[#0d1222] border border-red-500/40 rounded-2xl shadow-2xl p-6 sm:p-8 space-y-6">
+          <div className="text-center space-y-2">
+            <div className="w-14 h-14 rounded-2xl bg-red-950/50 border border-red-500/50 mx-auto flex items-center justify-center text-red-400 shadow-inner">
+              <AlertCircle className="w-7 h-7" />
+            </div>
+            <h2 className="text-xl font-black uppercase text-white tracking-tight font-heading">
+              ACCESS RESTRICTED
+            </h2>
+            <p className="text-xs font-mono text-red-300">
+              Administrative Privileges Required
+            </p>
+          </div>
+
+          <div className="p-4 bg-[#13192f] border border-[#273153] rounded-xl text-xs font-mono space-y-2 text-slate-300">
+            <div className="flex items-center gap-2 text-slate-400">
+              <UserIcon className="w-4 h-4 text-slate-400" />
+              <span>Signed in as:</span>
+            </div>
+            <div className="font-bold text-white break-all bg-[#080b14] p-2 rounded border border-[#273153]">
+              {currentUser.email || currentUser.uid}
+            </div>
+            <p className="text-[11px] text-slate-400 pt-1 leading-relaxed">
+              This account is not registered as an authorized administrator. All CMS modifications and Firestore operations are restricted by security rules.
+            </p>
+          </div>
+
+          <div className="flex flex-col gap-3 font-mono text-xs">
+            <button
+              type="button"
+              onClick={handleLogout}
+              className="w-full py-2.5 bg-red-950/60 hover:bg-red-900/60 border border-red-500/50 text-red-200 font-bold rounded-lg transition-colors cursor-pointer flex items-center justify-center gap-2"
+            >
+              <LogOut className="w-4 h-4" />
+              <span>Sign Out &amp; Switch Account</span>
+            </button>
+            <button
+              type="button"
+              onClick={onClose}
+              className="w-full py-2.5 bg-[#13192f] hover:bg-[#18203d] border border-[#273153] text-slate-300 font-bold rounded-lg transition-colors cursor-pointer"
+            >
+              Return to Storefront
+            </button>
           </div>
         </div>
       </div>
@@ -743,7 +856,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   }
 
   // ====================================================
-  // 2. RENDER AUTHENTICATED CMS DASHBOARD (IMAGES + VIDEOS)
+  // 2. RENDER AUTHENTICATED FIREBASE CMS DASHBOARD
   // ====================================================
   const wrapperClass = isStandalonePage
     ? "min-h-screen bg-[#080b14] text-slate-200 flex flex-col p-2 sm:p-4 selection:bg-[#d4ff32] selection:text-[#080b14]"
@@ -767,19 +880,20 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
           <div>
             <div className="flex items-center gap-2">
               <span className="w-2.5 h-2.5 rounded-full bg-[#d4ff32] animate-pulse"></span>
-              <span className="text-[10px] font-mono text-[#d4ff32] uppercase font-bold tracking-widest">
-                ADMIN CONTROL CENTER • CLOUDINARY CONNECTED (zpzdjznd)
+              <span className="text-[10px] font-mono text-[#d4ff32] uppercase font-bold tracking-widest flex items-center gap-1.5">
+                <Database className="w-3 h-3" /> FIRESTORE CLOUD CMS • CLOUDINARY (zpzdjznd)
               </span>
             </div>
             <h2 className="text-lg sm:text-xl font-black uppercase text-white font-heading">
-              {businessInfo.name} — MEDIA &amp; CONTENT CMS
+              {businessInfo.name} — ADMIN DASHBOARD
             </h2>
           </div>
 
           <div className="flex items-center gap-2 font-mono text-xs">
-            <span className="hidden md:inline-block px-2.5 py-1 bg-[#080b14] border border-[#273153] rounded text-slate-300 text-[11px]">
-              Door: <strong className="text-white">{businessInfo.shopDoor}</strong>
-            </span>
+            <div className="hidden lg:flex items-center gap-1.5 px-2.5 py-1 bg-[#080b14] border border-[#273153] rounded text-slate-300 text-[11px]">
+              <UserIcon className="w-3 h-3 text-[#d4ff32]" />
+              <span className="truncate max-w-[150px]">{currentUser.email || 'Admin'}</span>
+            </div>
 
             <button
               onClick={onClose}
@@ -790,15 +904,21 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
             </button>
 
             <button
-              onClick={() => {
-                if (window.confirm('Reset all catalog, media, and CMS content to factory defaults?')) {
-                  dataService.resetAll();
-                  onDataChanged();
-                  showFeedback('All content restored to initial factory defaults.');
+              onClick={async () => {
+                if (window.confirm('Sync & seed default catalog to Cloud Firestore? (Will not duplicate existing records)')) {
+                  setIsSavingToFirestore(true);
+                  try {
+                    await dataService.seedInitialDataIfEmpty();
+                    showFeedback('Catalog synchronized to Cloud Firestore.');
+                  } catch (err: any) {
+                    showFeedback(err.message || 'Sync failed', true);
+                  } finally {
+                    setIsSavingToFirestore(false);
+                  }
                 }
               }}
-              className="p-2 text-slate-400 hover:text-amber-300 bg-[#0d1222] rounded-lg border border-[#273153] transition-colors cursor-pointer"
-              title="Reset to Factory Defaults"
+              className="p-2 text-slate-400 hover:text-emerald-300 bg-[#0d1222] rounded-lg border border-[#273153] transition-colors cursor-pointer"
+              title="Sync / Seed Initial Data to Firestore"
             >
               <RefreshCw className="w-4 h-4" />
             </button>
@@ -843,6 +963,12 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
             <span>{uploadProgressText}</span>
           </div>
         )}
+        {isSavingToFirestore && (
+          <div className="px-4 py-2 bg-blue-950/90 border-b border-blue-500/50 text-blue-200 text-xs font-mono flex items-center gap-2">
+            <RefreshCw className="w-4 h-4 animate-spin text-blue-400 shrink-0" />
+            <span>Saving changes to Cloud Firestore...</span>
+          </div>
+        )}
 
         {/* CMS Navigation Tabs Bar */}
         <div className="bg-[#080b14] border-b border-[#273153] px-2 sm:px-4 flex overflow-x-auto shrink-0 scrollbar-none font-mono text-xs">
@@ -881,7 +1007,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         <div className="flex-1 overflow-y-auto p-4 sm:p-6 space-y-6">
 
           {/* ==================================================== */}
-          {/* TAB 1: DASHBOARD METRICS & OVERVIEW */}
+          {/* TAB 1: DASHBOARD METRICS & CLOUD OVERVIEW */}
           {/* ==================================================== */}
           {activeTab === 'dashboard' && (
             <div className="space-y-6 font-mono text-xs">
@@ -890,7 +1016,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                 <div className="p-4 bg-[#13192f] rounded-xl border border-[#273153]">
                   <span className="text-slate-400 text-[10px] uppercase font-bold block mb-1">Total Products</span>
                   <div className="text-2xl font-black text-white">{products.length}</div>
-                  <span className="text-[#d4ff32] text-[10px] mt-1 block">In Store Catalogue</span>
+                  <span className="text-[#d4ff32] text-[10px] mt-1 block">Live in Firestore</span>
                 </div>
                 <div className="p-4 bg-[#13192f] rounded-xl border border-[#273153]">
                   <span className="text-slate-400 text-[10px] uppercase font-bold block mb-1">Featured Items</span>
@@ -905,29 +1031,29 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   </span>
                 </div>
                 <div className="p-4 bg-[#13192f] rounded-xl border border-[#273153]">
-                  <span className="text-slate-400 text-[10px] uppercase font-bold block mb-1">Cloudinary CDN</span>
+                  <span className="text-slate-400 text-[10px] uppercase font-bold block mb-1">Cloud Firestore</span>
                   <div className="text-emerald-400 font-black text-sm flex items-center gap-1.5 mt-1">
                     <CheckCircle className="w-4 h-4 text-emerald-400" />
                     <span>CONNECTED</span>
                   </div>
-                  <span className="text-slate-400 text-[10px] mt-1 block font-mono">zpzdjznd</span>
+                  <span className="text-slate-400 text-[10px] mt-1 block font-mono">Shared globally</span>
                 </div>
               </div>
 
-              {/* Cloudinary Integration Status Card */}
+              {/* Cloudinary & Firestore Info Card */}
               <div className="p-5 bg-[#13192f] rounded-2xl border border-[#273153] space-y-3">
                 <div className="flex items-center justify-between flex-wrap gap-2">
                   <div className="flex items-center gap-2">
                     <Sparkles className="w-4 h-4 text-[#d4ff32]" />
-                    <h3 className="text-sm font-bold text-white uppercase">Cloudinary Unsigned Upload Configuration</h3>
+                    <h3 className="text-sm font-bold text-white uppercase">Production Cloud Architecture</h3>
                   </div>
-                  <span className="px-2.5 py-0.5 rounded bg-[#d4ff32]/20 text-[#d4ff32] font-mono text-[10px] font-bold">
-                    PRESET ACTIVE
+                  <span className="px-2.5 py-0.5 rounded bg-emerald-500/20 text-emerald-300 font-mono text-[10px] font-bold">
+                    FIREBASE + CLOUDINARY ACTIVE
                   </span>
                 </div>
                 <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 p-3.5 bg-[#080b14] rounded-xl border border-[#273153] text-[11px]">
                   <div>
-                    <span className="text-slate-500 block uppercase text-[10px]">Cloud Name:</span>
+                    <span className="text-slate-500 block uppercase text-[10px]">Cloudinary Cloud Name:</span>
                     <span className="text-white font-bold">{CLOUDINARY_CONFIG.cloudName}</span>
                   </div>
                   <div>
@@ -936,11 +1062,11 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   </div>
                   <div>
                     <span className="text-slate-500 block uppercase text-[10px]">Max Video Length:</span>
-                    <span className="text-white font-bold">1 min 30 secs (90s limit)</span>
+                    <span className="text-white font-bold">{MAX_VIDEO_DURATION_SECONDS}s (Strict 50s Limit)</span>
                   </div>
                 </div>
                 <p className="text-slate-400 text-[11px]">
-                  Direct unsigned client-side uploads are enabled for both high-resolution product photographs and up to 1 min 30 secs demonstration videos. All uploaded files go directly to your Cloudinary media library.
+                  All catalog updates, product additions, background media, and WhatsApp settings save directly to Cloud Firestore. Changes are instantly reflected for all public visitors across phones and computers without rebuilding the site.
                 </p>
               </div>
 
@@ -967,7 +1093,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                 >
                   <Plus className="w-5 h-5 text-[#d4ff32] mb-2 group-hover:scale-110 transition-transform" />
                   <span className="block text-white font-bold text-sm">Add New Product</span>
-                  <span className="text-slate-400 text-[11px]">Upload engine or spare part with images/video</span>
+                  <span className="text-slate-400 text-[11px]">Upload engine or part with image/video</span>
                 </button>
 
                 <button
@@ -984,15 +1110,15 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   className="p-4 bg-[#13192f] hover:bg-[#18203d] border border-[#273153] hover:border-[#d4ff32]/50 rounded-xl text-left transition-colors cursor-pointer group"
                 >
                   <Film className="w-5 h-5 text-[#d4ff32] mb-2 group-hover:scale-110 transition-transform" />
-                  <span className="block text-white font-bold text-sm">Upload Video (Max 1m 30s)</span>
-                  <span className="text-slate-400 text-[11px]">Upload shop tour or engine test clips to Cloudinary</span>
+                  <span className="block text-white font-bold text-sm">Upload Video (Max 50s)</span>
+                  <span className="text-slate-400 text-[11px]">Upload shop tour or engine test clips</span>
                 </button>
               </div>
             </div>
           )}
 
           {/* ==================================================== */}
-          {/* TAB 2: PRODUCTS MANAGEMENT (IMAGES + VIDEOS) */}
+          {/* TAB 2: PRODUCTS MANAGEMENT (FIRESTORE SYNCED) */}
           {/* ==================================================== */}
           {activeTab === 'products' && (
             <div className="space-y-6">
@@ -1102,9 +1228,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                                 </td>
                                 <td className="p-3">
                                   <button
-                                    onClick={() => {
-                                      dataService.updateProduct({ ...prod, featured: !prod.featured });
-                                      onDataChanged();
+                                    onClick={async () => {
+                                      await dataService.saveProduct({ ...prod, featured: !prod.featured });
                                       showFeedback(`Toggled featured status for ${prod.name}`);
                                     }}
                                     className={`p-1.5 rounded transition-colors cursor-pointer ${
@@ -1123,8 +1248,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                                         id: prod.id,
                                         name: prod.name,
                                         category: prod.category,
-                                        images: prod.images,
-                                        imageDetails: prod.imageDetails || prod.images.map(url => ({ url })),
+                                        images: prod.images || [],
+                                        imageDetails: prod.imageDetails || [],
                                         videoUrl: prod.videoUrl || '',
                                         videoPublicId: prod.videoPublicId,
                                         videoDuration: prod.videoDuration,
@@ -1136,20 +1261,14 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                                         featured: !!prod.featured
                                       });
                                     }}
-                                    className="p-1.5 text-slate-300 hover:text-white bg-[#080b14] hover:bg-[#273153] rounded border border-[#273153] transition-colors cursor-pointer"
+                                    className="p-1.5 text-slate-400 hover:text-white bg-[#080b14] rounded border border-[#273153] transition-colors cursor-pointer"
                                     title="Edit Product"
                                   >
                                     <Edit2 className="w-3.5 h-3.5" />
                                   </button>
                                   <button
-                                    onClick={() => {
-                                      if (window.confirm(`Delete product "${prod.name}" from inventory?`)) {
-                                        dataService.deleteProduct(prod.id);
-                                        onDataChanged();
-                                        showFeedback(`Deleted product ${prod.name}`);
-                                      }
-                                    }}
-                                    className="p-1.5 text-slate-400 hover:text-red-400 bg-[#080b14] hover:bg-red-950/40 rounded border border-[#273153] transition-colors cursor-pointer"
+                                    onClick={() => handleDeleteProduct(prod.id, prod.name)}
+                                    className="p-1.5 text-slate-400 hover:text-red-400 bg-[#080b14] rounded border border-[#273153] transition-colors cursor-pointer"
                                     title="Delete Product"
                                   >
                                     <Trash2 className="w-3.5 h-3.5" />
@@ -1163,12 +1282,12 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   </div>
                 </>
               ) : (
-                /* EDIT PRODUCT FORM */
-                <form onSubmit={handleSaveProduct} className="p-5 sm:p-6 bg-[#13192f] rounded-2xl border border-[#273153] space-y-6 font-mono text-xs">
+                /* Edit / Add Product Form */
+                <form onSubmit={handleSaveProduct} className="p-5 bg-[#13192f] rounded-2xl border border-[#273153] space-y-6 font-mono text-xs">
                   <div className="flex items-center justify-between border-b border-[#273153] pb-4">
                     <h3 className="text-base font-bold text-white uppercase flex items-center gap-2">
                       <Layers className="w-4 h-4 text-[#d4ff32]" />
-                      <span>{productForm.id ? `Edit Product: ${productForm.name}` : 'Create New Product'}</span>
+                      <span>{productForm.id ? `Edit Product: ${productForm.name}` : 'Add New Product'}</span>
                     </h3>
                     <button
                       type="button"
@@ -1179,22 +1298,111 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                     </button>
                   </div>
 
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  {/* Hidden File Inputs for Direct Upload */}
+                  <input
+                    type="file"
+                    ref={productFileInputRef}
+                    onChange={handleProductFileUpload}
+                    accept="image/*"
+                    multiple
+                    className="hidden"
+                  />
+                  <input
+                    type="file"
+                    ref={productVideoInputRef}
+                    onChange={handleProductVideoUpload}
+                    accept="video/*"
+                    className="hidden"
+                  />
+
+                  {/* Image Upload Zone */}
+                  <div className="space-y-3">
+                    <div className="flex items-center justify-between">
+                      <label className="text-slate-300 font-bold uppercase text-[11px] block">
+                        Product Images ({productForm.images.length})
+                      </label>
+                      <div className="flex gap-2">
+                        <button
+                          type="button"
+                          onClick={() => productFileInputRef.current?.click()}
+                          disabled={isUploadingToCloudinary}
+                          className="px-3 py-1.5 bg-[#d4ff32] hover:bg-[#c1ec25] text-[#080b14] font-bold rounded flex items-center gap-1.5 transition-colors cursor-pointer disabled:opacity-50"
+                        >
+                          <Upload className="w-3.5 h-3.5" />
+                          <span>Upload from Local PC</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => productVideoInputRef.current?.click()}
+                          disabled={isUploadingToCloudinary}
+                          className="px-3 py-1.5 bg-[#080b14] hover:bg-[#18203d] text-slate-300 border border-[#273153] font-bold rounded flex items-center gap-1.5 transition-colors cursor-pointer disabled:opacity-50"
+                        >
+                          <Film className="w-3.5 h-3.5 text-[#d4ff32]" />
+                          <span>Upload Video (Max 50s)</span>
+                        </button>
+                      </div>
+                    </div>
+
+                    {/* Image Thumbnails & Video Display */}
+                    <div className="flex flex-wrap gap-3 p-3 bg-[#080b14] rounded-xl border border-[#273153] min-h-[90px] items-center">
+                      {productForm.images.length === 0 && !productForm.videoUrl && (
+                        <p className="text-slate-500 text-[11px]">No media attached yet. Upload images or a short video from your local computer.</p>
+                      )}
+
+                      {productForm.images.map((imgUrl, idx) => (
+                        <div key={idx} className="relative w-24 h-20 rounded-lg overflow-hidden border border-[#273153] group bg-black shrink-0">
+                          <img src={imgUrl} alt={`Product ${idx + 1}`} className="w-full h-full object-cover" />
+                          <button
+                            type="button"
+                            onClick={() => {
+                              const newImages = productForm.images.filter((_, i) => i !== idx);
+                              const newDetails = productForm.imageDetails.filter((_, i) => i !== idx);
+                              setProductForm({ ...productForm, images: newImages, imageDetails: newDetails });
+                            }}
+                            className="absolute top-1 right-1 p-1 bg-red-600 text-white rounded opacity-0 group-hover:opacity-100 transition-opacity cursor-pointer"
+                            title="Remove Image"
+                          >
+                            <Trash2 className="w-3 h-3" />
+                          </button>
+                        </div>
+                      ))}
+
+                      {productForm.videoUrl && (
+                        <div className="relative w-36 h-20 rounded-lg overflow-hidden border-2 border-[#d4ff32] bg-black group shrink-0 flex items-center justify-center">
+                          <video src={productForm.videoUrl} className="w-full h-full object-cover" />
+                          <div className="absolute inset-0 bg-black/40 flex items-center justify-center pointer-events-none">
+                            <Play className="w-6 h-6 text-[#d4ff32]" />
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => setProductForm({ ...productForm, videoUrl: '', videoPublicId: undefined, videoDuration: undefined })}
+                            className="absolute top-1 right-1 p-1 bg-red-600 text-white rounded cursor-pointer z-10"
+                            title="Remove Video"
+                          >
+                            <Trash2 className="w-3 h-3" />
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Form Fields Grid */}
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                     <div>
                       <label className="block text-slate-300 font-bold uppercase mb-1">
-                        Product Name: (Exact Rule: e.g. OPEL 1.6, ASTRA G, OPEL HEAD 2.0)
+                        Exact Product Name:
                       </label>
                       <input
                         type="text"
                         value={productForm.name}
                         onChange={(e) => setProductForm({ ...productForm, name: e.target.value })}
-                        placeholder="e.g. OPEL 1.6"
-                        className="w-full bg-[#080b14] border border-[#273153] focus:border-[#d4ff32] rounded-lg px-3.5 py-2.5 text-white font-bold outline-none"
+                        placeholder="e.g. OPEL 1.6 or ASTRA G"
+                        className="w-full bg-[#080b14] border border-[#273153] focus:border-[#d4ff32] rounded-lg px-3 py-2 text-white outline-none font-bold"
                         required
                       />
-                      <p className="text-[10px] text-slate-400 mt-1">
-                        Uploading an image will automatically adopt the exact filename (excluding extension).
-                      </p>
+                      <span className="text-[10px] text-slate-500 mt-1 block">
+                        Auto-assigned from uploaded file name without extension.
+                      </span>
                     </div>
 
                     <div>
@@ -1204,136 +1412,14 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                       <select
                         value={productForm.category}
                         onChange={(e) => setProductForm({ ...productForm, category: e.target.value })}
-                        className="w-full bg-[#080b14] border border-[#273153] focus:border-[#d4ff32] rounded-lg px-3.5 py-2.5 text-white outline-none"
+                        className="w-full bg-[#080b14] border border-[#273153] focus:border-[#d4ff32] rounded-lg px-3 py-2 text-white outline-none"
                       >
                         {categories.map(c => (
                           <option key={c.id} value={c.name}>{c.name}</option>
                         ))}
                       </select>
                     </div>
-                  </div>
 
-                  {/* Media Uploads: Images & Demonstration Video */}
-                  <div className="space-y-4 p-4 bg-[#080b14] rounded-xl border border-[#273153]">
-                    <div className="flex items-center justify-between flex-wrap gap-2">
-                      <div>
-                        <span className="text-white font-bold text-sm block">Product Images &amp; Video</span>
-                        <span className="text-slate-400 text-[11px]">Upload images &amp; optional demo video (Max 50s) to Cloudinary</span>
-                      </div>
-                      <div className="flex items-center gap-2">
-                        <input
-                          type="file"
-                          ref={productFileInputRef}
-                          onChange={handleProductFileUpload}
-                          multiple
-                          accept="image/*"
-                          className="hidden"
-                        />
-                        <button
-                          type="button"
-                          onClick={() => productFileInputRef.current?.click()}
-                          disabled={isUploadingToCloudinary}
-                          className="px-3 py-2 bg-[#13192f] hover:bg-[#18203d] text-[#d4ff32] border border-[#273153] hover:border-[#d4ff32]/50 rounded-lg flex items-center gap-1.5 transition-colors cursor-pointer"
-                        >
-                          <Upload className="w-3.5 h-3.5" />
-                          <span>Upload Images</span>
-                        </button>
-
-                        <input
-                          type="file"
-                          ref={productVideoInputRef}
-                          onChange={handleProductVideoUpload}
-                          accept="video/*"
-                          className="hidden"
-                        />
-                        <button
-                          type="button"
-                          onClick={() => productVideoInputRef.current?.click()}
-                          disabled={isUploadingToCloudinary}
-                          className="px-3 py-2 bg-[#13192f] hover:bg-[#18203d] text-emerald-300 border border-[#273153] hover:border-emerald-400/50 rounded-lg flex items-center gap-1.5 transition-colors cursor-pointer"
-                        >
-                          <Film className="w-3.5 h-3.5" />
-                          <span>Attach Video (Max 50s)</span>
-                        </button>
-                      </div>
-                    </div>
-
-                    {/* Image Thumbnails List */}
-                    <div className="space-y-2">
-                      <span className="text-slate-400 text-[10px] uppercase font-bold block">Uploaded Images ({productForm.images.length}):</span>
-                      {productForm.images.length === 0 ? (
-                        <div className="p-4 border border-dashed border-[#273153] rounded-lg text-center text-slate-500 text-xs">
-                          No images uploaded yet. Upload from your computer or pick from the Media Library.
-                        </div>
-                      ) : (
-                        <div className="flex flex-wrap gap-3">
-                          {productForm.images.map((imgUrl, idx) => (
-                            <div key={idx} className="relative group w-24 h-20 rounded-lg overflow-hidden bg-black border border-[#273153]">
-                              <img src={imgUrl} alt={`Uploaded ${idx}`} className="w-full h-full object-cover" />
-                              {idx === 0 && (
-                                <span className="absolute top-1 left-1 bg-[#d4ff32] text-[#080b14] text-[9px] font-bold px-1 rounded uppercase">
-                                  Primary
-                                </span>
-                              )}
-                              <div className="absolute inset-0 bg-black/75 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center gap-1">
-                                {idx !== 0 && (
-                                  <button
-                                    type="button"
-                                    onClick={() => {
-                                      const reordered = [...productForm.images];
-                                      const [moved] = reordered.splice(idx, 1);
-                                      reordered.unshift(moved);
-                                      setProductForm({ ...productForm, images: reordered });
-                                    }}
-                                    className="p-1 bg-[#d4ff32] text-[#080b14] rounded"
-                                    title="Make Primary Image"
-                                  >
-                                    <Star className="w-3 h-3 fill-current" />
-                                  </button>
-                                )}
-                                <button
-                                  type="button"
-                                  onClick={() => {
-                                    const filtered = productForm.images.filter((_, i) => i !== idx);
-                                    setProductForm({ ...productForm, images: filtered });
-                                  }}
-                                  className="p-1 bg-red-600 text-white rounded"
-                                  title="Remove Image"
-                                >
-                                  <Trash2 className="w-3 h-3" />
-                                </button>
-                              </div>
-                            </div>
-                          ))}
-                        </div>
-                      )}
-                    </div>
-
-                    {/* Attached Video Clip Display */}
-                    {productForm.videoUrl && (
-                      <div className="p-3 bg-[#13192f] rounded-lg border border-[#273153] flex items-center justify-between gap-3">
-                        <div className="flex items-center gap-2">
-                          <Play className="w-4 h-4 text-[#d4ff32] fill-current" />
-                          <div>
-                            <span className="text-white font-bold block text-xs">Attached Video Demonstration</span>
-                            <span className="text-slate-400 text-[10px]">
-                              {productForm.videoDuration ? `Duration: ${Math.round(productForm.videoDuration)}s • ` : ''}Cloudinary Hosted
-                            </span>
-                          </div>
-                        </div>
-                        <button
-                          type="button"
-                          onClick={() => setProductForm({ ...productForm, videoUrl: '', videoPublicId: undefined, videoDuration: undefined })}
-                          className="px-2.5 py-1 text-red-400 hover:text-red-300 bg-[#080b14] border border-red-900/50 rounded text-[11px]"
-                        >
-                          Remove Video
-                        </button>
-                      </div>
-                    )}
-                  </div>
-
-                  {/* Specifications & Compatibility */}
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                     <div>
                       <label className="block text-slate-300 font-bold uppercase mb-1">
                         Fitment / Compatibility:
@@ -1343,7 +1429,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                         value={productForm.fitment}
                         onChange={(e) => setProductForm({ ...productForm, fitment: e.target.value })}
                         placeholder="e.g. Opel Astra, Vectra A, Zafira"
-                        className="w-full bg-[#080b14] border border-[#273153] focus:border-[#d4ff32] rounded-lg px-3.5 py-2 text-white outline-none"
+                        className="w-full bg-[#080b14] border border-[#273153] focus:border-[#d4ff32] rounded-lg px-3 py-2 text-white outline-none"
                       />
                     </div>
 
@@ -1355,34 +1441,34 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                         type="text"
                         value={productForm.availability}
                         onChange={(e) => setProductForm({ ...productForm, availability: e.target.value })}
-                        placeholder="In Stock (Shop Door E-3)"
-                        className="w-full bg-[#080b14] border border-[#273153] focus:border-[#d4ff32] rounded-lg px-3.5 py-2 text-white outline-none"
-                      />
-                    </div>
-
-                    <div className="md:col-span-2">
-                      <label className="block text-slate-300 font-bold uppercase mb-1">
-                        Technical Overview / Description:
-                      </label>
-                      <textarea
-                        value={productForm.description}
-                        onChange={(e) => setProductForm({ ...productForm, description: e.target.value })}
-                        rows={3}
-                        placeholder="Complete assembly with mounting points, intake components, and engine wiring."
-                        className="w-full bg-[#080b14] border border-[#273153] focus:border-[#d4ff32] rounded-lg p-3 text-white outline-none"
+                        placeholder="e.g. In Stock (Shop Door E-3)"
+                        className="w-full bg-[#080b14] border border-[#273153] focus:border-[#d4ff32] rounded-lg px-3 py-2 text-white outline-none"
                       />
                     </div>
                   </div>
 
-                  <div className="flex items-center gap-2 pt-2">
-                    <label className="flex items-center gap-2 cursor-pointer">
+                  <div>
+                    <label className="block text-slate-300 font-bold uppercase mb-1">
+                      Description:
+                    </label>
+                    <textarea
+                      rows={3}
+                      value={productForm.description}
+                      onChange={(e) => setProductForm({ ...productForm, description: e.target.value })}
+                      placeholder="Product details, condition, components included..."
+                      className="w-full bg-[#080b14] border border-[#273153] focus:border-[#d4ff32] rounded-lg p-3 text-white outline-none"
+                    />
+                  </div>
+
+                  <div className="flex items-center gap-2">
+                    <label className="flex items-center gap-2 cursor-pointer text-slate-300 font-bold">
                       <input
                         type="checkbox"
                         checked={productForm.featured}
                         onChange={(e) => setProductForm({ ...productForm, featured: e.target.checked })}
-                        className="rounded border-[#273153] bg-[#080b14] text-[#d4ff32] focus:ring-0"
+                        className="rounded border-[#273153] bg-[#080b14] text-[#d4ff32] focus:ring-0 w-4 h-4"
                       />
-                      <span className="text-white font-bold">Feature this engine in Homepage Spotlight</span>
+                      <span>Feature this product in the Homepage Spotlight</span>
                     </label>
                   </div>
 
@@ -1390,17 +1476,17 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                     <button
                       type="button"
                       onClick={() => setIsEditingProduct(false)}
-                      className="px-4 py-2.5 bg-[#080b14] hover:bg-[#18203d] text-slate-300 rounded-lg transition-colors cursor-pointer"
+                      className="px-4 py-2 bg-[#080b14] hover:bg-[#18203d] text-slate-300 rounded-lg transition-colors cursor-pointer"
                     >
                       Cancel
                     </button>
                     <button
                       type="submit"
-                      disabled={isUploadingToCloudinary}
-                      className="px-6 py-2.5 bg-[#d4ff32] hover:bg-[#c1ec25] text-[#080b14] font-extrabold uppercase rounded-lg transition-colors cursor-pointer flex items-center gap-2"
+                      disabled={isSavingToFirestore}
+                      className="px-6 py-2 bg-[#d4ff32] hover:bg-[#c1ec25] text-[#080b14] font-extrabold uppercase rounded-lg transition-all cursor-pointer flex items-center gap-2 disabled:opacity-50"
                     >
                       <Check className="w-4 h-4" />
-                      <span>{productForm.id ? 'Save Changes' : 'Publish Product'}</span>
+                      <span>{isSavingToFirestore ? 'Saving to Firestore...' : 'Save Product to Firestore'}</span>
                     </button>
                   </div>
                 </form>
@@ -1412,22 +1498,35 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
           {/* TAB 3: CATEGORIES MANAGEMENT */}
           {/* ==================================================== */}
           {activeTab === 'categories' && (
-            <div className="space-y-6 max-w-4xl font-mono text-xs">
-              <div className="p-4 sm:p-5 bg-[#13192f] rounded-2xl border border-[#273153] space-y-4">
+            <div className="space-y-6 font-mono text-xs max-w-2xl">
+              <div className="p-5 bg-[#13192f] rounded-2xl border border-[#273153] space-y-4">
                 <h3 className="text-sm font-bold text-white uppercase flex items-center gap-2">
                   <Sliders className="w-4 h-4 text-[#d4ff32]" />
-                  <span>Inventory Categories</span>
+                  <span>Manage Product Categories</span>
                 </h3>
 
-                {/* Add Category Form */}
+                {/* Add Category */}
                 <form
-                  onSubmit={(e) => {
+                  onSubmit={async (e) => {
                     e.preventDefault();
                     if (!newCategoryName.trim()) return;
-                    dataService.addCategory(newCategoryName.trim());
-                    setNewCategoryName('');
-                    onDataChanged();
-                    showFeedback(`Category "${newCategoryName}" added!`);
+                    setIsSavingToFirestore(true);
+                    try {
+                      const id = `cat-${Date.now()}`;
+                      const slug = newCategoryName.toLowerCase().replace(/[^a-z0-9]+/g, '-');
+                      await dataService.saveCategory({
+                        id,
+                        name: newCategoryName.trim(),
+                        slug,
+                        order: categories.length + 1
+                      });
+                      setNewCategoryName('');
+                      showFeedback(`Category "${newCategoryName}" saved to Firestore!`);
+                    } catch (err: any) {
+                      showFeedback(err.message || 'Error saving category', true);
+                    } finally {
+                      setIsSavingToFirestore(false);
+                    }
                   }}
                   className="flex gap-2"
                 >
@@ -1435,11 +1534,13 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                     type="text"
                     value={newCategoryName}
                     onChange={(e) => setNewCategoryName(e.target.value)}
-                    placeholder="e.g. Gearboxes, Cylinder Heads..."
-                    className="flex-1 bg-[#080b14] border border-[#273153] focus:border-[#d4ff32] rounded-lg px-3.5 py-2 text-white outline-none"
+                    placeholder="New category name (e.g. Gearboxes)"
+                    className="flex-1 bg-[#080b14] border border-[#273153] focus:border-[#d4ff32] rounded-lg px-3 py-2 text-white outline-none"
+                    required
                   />
                   <button
                     type="submit"
+                    disabled={isSavingToFirestore}
                     className="px-4 py-2 bg-[#d4ff32] hover:bg-[#c1ec25] text-[#080b14] font-bold uppercase rounded-lg transition-colors cursor-pointer flex items-center gap-1.5"
                   >
                     <Plus className="w-4 h-4" />
@@ -1447,63 +1548,60 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   </button>
                 </form>
 
-                {/* Category List */}
-                <div className="divide-y divide-[#273153] bg-[#080b14] rounded-xl border border-[#273153] overflow-hidden">
-                  {categories.map((cat, idx) => (
-                    <div key={cat.id} className="p-3.5 flex items-center justify-between gap-3">
+                {/* Categories List */}
+                <div className="space-y-2 pt-2">
+                  {categories.map((cat) => (
+                    <div key={cat.id} className="flex items-center justify-between p-3 bg-[#080b14] rounded-xl border border-[#273153]">
                       {editingCategoryId === cat.id ? (
                         <div className="flex items-center gap-2 flex-1">
                           <input
                             type="text"
                             value={editingCategoryName}
                             onChange={(e) => setEditingCategoryName(e.target.value)}
-                            className="flex-1 bg-[#13192f] border border-[#d4ff32] rounded px-3 py-1 text-white outline-none"
-                            autoFocus
+                            className="bg-[#13192f] border border-[#d4ff32] rounded px-2.5 py-1 text-white outline-none flex-1"
                           />
                           <button
-                            onClick={() => {
-                              if (editingCategoryName.trim()) {
-                                dataService.updateCategory({ ...cat, name: editingCategoryName.trim() });
-                                setEditingCategoryId(null);
-                                onDataChanged();
-                                showFeedback('Category updated!');
-                              }
+                            type="button"
+                            onClick={async () => {
+                              await dataService.saveCategory({ ...cat, name: editingCategoryName });
+                              setEditingCategoryId(null);
+                              showFeedback('Category updated in Firestore.');
                             }}
-                            className="p-1.5 bg-[#d4ff32] text-[#080b14] rounded"
+                            className="px-2.5 py-1 bg-[#d4ff32] text-[#080b14] rounded font-bold"
                           >
-                            <Check className="w-3.5 h-3.5" />
+                            Save
                           </button>
                           <button
+                            type="button"
                             onClick={() => setEditingCategoryId(null)}
-                            className="p-1.5 bg-slate-700 text-white rounded"
+                            className="px-2 py-1 text-slate-400"
                           >
-                            <X className="w-3.5 h-3.5" />
+                            Cancel
                           </button>
                         </div>
                       ) : (
                         <>
                           <div>
-                            <span className="text-white font-bold text-sm block">{cat.name}</span>
-                            <span className="text-slate-500 text-[10px]">
-                              Slug: {cat.slug} • {products.filter(p => p.category === cat.name).length} products assigned
-                            </span>
+                            <span className="text-white font-bold block">{cat.name}</span>
+                            <span className="text-slate-500 text-[10px]">Slug: {cat.slug}</span>
                           </div>
                           <div className="flex items-center gap-2">
                             <button
+                              type="button"
                               onClick={() => {
                                 setEditingCategoryId(cat.id);
                                 setEditingCategoryName(cat.name);
                               }}
-                              className="p-1.5 text-slate-300 hover:text-white bg-[#13192f] rounded border border-[#273153]"
+                              className="p-1.5 text-slate-400 hover:text-white bg-[#13192f] rounded border border-[#273153]"
                             >
                               <Edit2 className="w-3.5 h-3.5" />
                             </button>
                             <button
-                              onClick={() => {
+                              type="button"
+                              onClick={async () => {
                                 if (window.confirm(`Delete category "${cat.name}"?`)) {
-                                  dataService.deleteCategory(cat.id);
-                                  onDataChanged();
-                                  showFeedback('Category removed.');
+                                  await dataService.deleteCategory(cat.id);
+                                  showFeedback('Category deleted from Firestore.');
                                 }
                               }}
                               className="p-1.5 text-slate-400 hover:text-red-400 bg-[#13192f] rounded border border-[#273153]"
@@ -1521,58 +1619,61 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
           )}
 
           {/* ==================================================== */}
-          {/* TAB 4: FEATURED PRODUCTS MANAGEMENT */}
+          {/* TAB 4: FEATURED SPOTLIGHT ITEMS */}
           {/* ==================================================== */}
           {activeTab === 'featured' && (
-            <div className="space-y-6 max-w-4xl font-mono text-xs">
-              <div className="p-4 sm:p-5 bg-[#13192f] rounded-2xl border border-[#273153] space-y-4">
+            <div className="space-y-6 font-mono text-xs">
+              <div className="p-5 bg-[#13192f] rounded-2xl border border-[#273153] space-y-4">
                 <div className="flex items-center justify-between">
                   <div>
                     <h3 className="text-sm font-bold text-white uppercase flex items-center gap-2">
-                      <Star className="w-4 h-4 text-[#d4ff32]" />
-                      <span>Featured Powertrains Showcase</span>
+                      <Star className="w-4 h-4 text-[#d4ff32] fill-current" />
+                      <span>Featured Engines &amp; Powertrains</span>
                     </h3>
-                    <p className="text-slate-400 text-[11px]">
-                      Select which engines appear on the primary homepage showcase carousel.
+                    <p className="text-slate-400 text-[11px] mt-0.5">
+                      Items marked here appear in the prominent top Featured Spotlight section.
                     </p>
                   </div>
                 </div>
 
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 pt-2">
                   {products.map((prod) => (
                     <div
                       key={prod.id}
-                      className={`p-3.5 rounded-xl border flex items-center justify-between gap-3 transition-colors ${
-                        prod.featured 
-                          ? 'bg-[#080b14] border-[#d4ff32]/60' 
-                          : 'bg-[#080b14]/50 border-[#273153] opacity-75'
+                      className={`p-3.5 rounded-xl border transition-all ${
+                        prod.featured
+                          ? 'bg-[#080b14] border-[#d4ff32]/60 shadow-lg'
+                          : 'bg-[#080b14]/50 border-[#273153] opacity-70'
                       }`}
                     >
-                      <div className="flex items-center gap-3">
-                        <div className="w-12 h-10 rounded bg-black overflow-hidden border border-[#273153] shrink-0">
-                          {prod.images[0] && <img src={prod.images[0]} alt={prod.name} className="w-full h-full object-cover" />}
+                      <div className="flex gap-3 items-center">
+                        <div className="w-14 h-14 rounded-lg bg-black overflow-hidden border border-[#273153] shrink-0">
+                          {prod.images[0] ? (
+                            <img src={prod.images[0]} alt={prod.name} className="w-full h-full object-cover" />
+                          ) : (
+                            <ImageIcon className="w-4 h-4 m-auto text-slate-600" />
+                          )}
                         </div>
-                        <div>
-                          <span className="text-white font-bold block">{prod.name}</span>
-                          <span className="text-[#d4ff32] text-[10px]">{prod.category}</span>
+                        <div className="flex-1 min-w-0">
+                          <span className="font-bold text-white block truncate">{prod.name}</span>
+                          <span className="text-slate-400 text-[10px] block">{prod.category}</span>
                         </div>
+                        <button
+                          type="button"
+                          onClick={async () => {
+                            await dataService.saveProduct({ ...prod, featured: !prod.featured });
+                            showFeedback(`Updated featured status for "${prod.name}" in Firestore.`);
+                          }}
+                          className={`p-2 rounded-lg border transition-colors cursor-pointer ${
+                            prod.featured
+                              ? 'bg-[#d4ff32] text-[#080b14] border-[#d4ff32]'
+                              : 'bg-[#13192f] text-slate-400 border-[#273153] hover:text-white'
+                          }`}
+                          title={prod.featured ? 'Remove from Spotlight' : 'Add to Spotlight'}
+                        >
+                          <Star className={`w-4 h-4 ${prod.featured ? 'fill-current' : ''}`} />
+                        </button>
                       </div>
-
-                      <button
-                        onClick={() => {
-                          dataService.updateProduct({ ...prod, featured: !prod.featured });
-                          onDataChanged();
-                          showFeedback(`Updated featured status for ${prod.name}`);
-                        }}
-                        className={`px-3 py-1.5 rounded text-[11px] font-bold flex items-center gap-1.5 transition-colors cursor-pointer ${
-                          prod.featured 
-                            ? 'bg-[#d4ff32] text-[#080b14]' 
-                            : 'bg-[#13192f] text-slate-300 hover:text-white border border-[#273153]'
-                        }`}
-                      >
-                        <Star className={`w-3 h-3 ${prod.featured ? 'fill-current' : ''}`} />
-                        <span>{prod.featured ? 'Featured' : 'Include'}</span>
-                      </button>
                     </div>
                   ))}
                 </div>
@@ -1581,23 +1682,30 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
           )}
 
           {/* ==================================================== */}
-          {/* TAB 5: HERO SLIDESHOW (IMAGES & VIDEOS) */}
+          {/* TAB 5: HERO SLIDESHOW (IMAGES + VIDEOS) */}
           {/* ==================================================== */}
           {activeTab === 'hero' && (
-            <div className="space-y-6">
+            <div className="space-y-6 font-mono text-xs">
               {!isEditingSlide ? (
-                <>
+                <div className="space-y-4">
                   <div className="flex items-center justify-between">
                     <div>
-                      <h3 className="text-sm font-bold text-white uppercase font-mono">Hero Slideshow Carousel</h3>
-                      <p className="text-slate-400 text-xs font-mono">Manage showcase slides with photos or videos.</p>
+                      <h3 className="text-sm font-bold text-white uppercase flex items-center gap-2">
+                        <Film className="w-4 h-4 text-[#d4ff32]" />
+                        <span>Hero Carousel Slides</span>
+                      </h3>
+                      <p className="text-slate-400 text-[11px] mt-0.5">
+                        Manage slides displayed in the top header slideshow (supports images &amp; short video clips).
+                      </p>
                     </div>
+
                     <button
+                      type="button"
                       onClick={() => {
                         setIsEditingSlide(true);
                         setSlideForm({
                           title: '',
-                          subtitle: '',
+                          subtitle: 'ABOSSEY OKAI STOCK',
                           badge: 'SHOP DOOR E-3',
                           image: '',
                           mediaType: 'image',
@@ -1605,102 +1713,121 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                           active: true
                         });
                       }}
-                      className="px-4 py-2 bg-[#d4ff32] hover:bg-[#c1ec25] text-[#080b14] font-bold font-mono text-xs uppercase rounded-lg flex items-center gap-1.5 transition-colors cursor-pointer"
+                      className="px-4 py-2 bg-[#d4ff32] hover:bg-[#c1ec25] text-[#080b14] font-bold uppercase rounded-lg flex items-center gap-1.5 transition-colors cursor-pointer"
                     >
                       <Plus className="w-4 h-4" />
                       <span>Add Slide</span>
                     </button>
                   </div>
 
-                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 font-mono text-xs">
-                    {heroSlides.map((slide) => (
-                      <div key={slide.id} className="bg-[#13192f] rounded-2xl border border-[#273153] overflow-hidden flex flex-col">
-                        <div className="relative aspect-[16/10] bg-black">
+                  {/* Slides Grid */}
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                    {heroSlides.map((slide, idx) => (
+                      <div key={slide.id} className="p-4 bg-[#13192f] rounded-2xl border border-[#273153] space-y-3">
+                        <div className="aspect-[16/10] rounded-xl overflow-hidden bg-black border border-[#273153] relative">
                           {slide.mediaType === 'video' || slide.videoUrl ? (
                             <video src={slide.videoUrl || slide.image} className="w-full h-full object-cover" />
                           ) : (
                             <img src={slide.image} alt={slide.title} className="w-full h-full object-cover" />
                           )}
-                          <span className="absolute top-2 left-2 px-2 py-0.5 rounded bg-[#080b14]/90 text-[#d4ff32] text-[10px] font-bold border border-[#273153]">
-                            {slide.badge || 'SHOP DOOR E-3'}
+                          <span className="absolute top-2 left-2 px-2 py-0.5 rounded bg-[#d4ff32] text-[#080b14] font-bold text-[9px] uppercase">
+                            Slide {idx + 1}
                           </span>
-                          {(slide.mediaType === 'video' || slide.videoUrl) && (
-                            <span className="absolute bottom-2 left-2 px-2 py-0.5 rounded bg-[#d4ff32] text-[#080b14] text-[10px] font-bold flex items-center gap-1">
-                              <Play className="w-2.5 h-2.5 fill-current" /> Video
-                            </span>
-                          )}
                         </div>
-                        <div className="p-4 space-y-2 flex-1 flex flex-col justify-between">
-                          <div>
-                            <span className="text-[#d4ff32] text-[10px] uppercase font-bold block">{slide.subtitle}</span>
-                            <h4 className="text-white font-bold text-sm uppercase">{slide.title}</h4>
-                            {slide.description && <p className="text-slate-400 text-[11px] mt-1">{slide.description}</p>}
-                          </div>
-                          <div className="pt-3 border-t border-[#273153] flex items-center justify-between">
-                            <label className="flex items-center gap-2 cursor-pointer">
-                              <input
-                                type="checkbox"
-                                checked={slide.active}
-                                onChange={(e) => {
-                                  dataService.updateHeroSlide({ ...slide, active: e.target.checked });
-                                  onDataChanged();
-                                  showFeedback('Slide status toggled.');
-                                }}
-                                className="rounded border-[#273153] bg-[#080b14] text-[#d4ff32]"
-                              />
-                              <span className="text-slate-300 text-[11px]">Active</span>
-                            </label>
-                            <div className="space-x-1.5">
-                              <button
-                                onClick={() => {
-                                  setIsEditingSlide(true);
-                                  setSlideForm({
-                                    id: slide.id,
-                                    title: slide.title,
-                                    subtitle: slide.subtitle,
-                                    badge: slide.badge,
-                                    image: slide.image,
-                                    publicId: slide.publicId,
-                                    mediaType: slide.mediaType || 'image',
-                                    videoUrl: slide.videoUrl,
-                                    videoDuration: slide.videoDuration,
-                                    description: slide.description || '',
-                                    active: slide.active
-                                  });
-                                }}
-                                className="p-1.5 bg-[#080b14] text-slate-300 hover:text-white rounded border border-[#273153]"
-                              >
-                                <Edit2 className="w-3.5 h-3.5" />
-                              </button>
-                              <button
-                                onClick={() => {
-                                  if (window.confirm('Delete hero slide?')) {
-                                    dataService.deleteHeroSlide(slide.id);
-                                    onDataChanged();
-                                    showFeedback('Hero slide deleted.');
-                                  }
-                                }}
-                                className="p-1.5 bg-[#080b14] text-slate-400 hover:text-red-400 rounded border border-[#273153]"
-                              >
-                                <Trash2 className="w-3.5 h-3.5" />
-                              </button>
-                            </div>
+
+                        <div>
+                          <span className="font-bold text-white text-sm block truncate">{slide.title}</span>
+                          <span className="text-slate-400 text-[11px] block">{slide.subtitle}</span>
+                        </div>
+
+                        <div className="flex items-center justify-between pt-2 border-t border-[#273153]">
+                          <label className="flex items-center gap-1.5 cursor-pointer text-slate-400 text-[11px]">
+                            <input
+                              type="checkbox"
+                              checked={slide.active}
+                              onChange={async (e) => {
+                                await dataService.saveHeroSlide({ ...slide, active: e.target.checked });
+                                showFeedback('Updated slide status in Firestore.');
+                              }}
+                              className="rounded border-[#273153] bg-[#080b14] text-[#d4ff32] focus:ring-0"
+                            />
+                            <span>Active</span>
+                          </label>
+
+                          <div className="flex items-center gap-2">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setIsEditingSlide(true);
+                                setSlideForm({
+                                  id: slide.id,
+                                  title: slide.title,
+                                  subtitle: slide.subtitle,
+                                  badge: slide.badge,
+                                  image: slide.image,
+                                  publicId: slide.publicId,
+                                  mediaType: slide.mediaType || 'image',
+                                  videoUrl: slide.videoUrl,
+                                  videoDuration: slide.videoDuration,
+                                  description: slide.description || '',
+                                  active: slide.active
+                                });
+                              }}
+                              className="p-1.5 text-slate-400 hover:text-white bg-[#080b14] rounded border border-[#273153]"
+                            >
+                              <Edit2 className="w-3.5 h-3.5" />
+                            </button>
+                            <button
+                              type="button"
+                              onClick={async () => {
+                                if (window.confirm('Delete this slide from Firestore?')) {
+                                  await dataService.deleteHeroSlide(slide.id);
+                                  showFeedback('Hero slide deleted from Firestore.');
+                                }
+                              }}
+                              className="p-1.5 text-slate-400 hover:text-red-400 bg-[#080b14] rounded border border-[#273153]"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
                           </div>
                         </div>
                       </div>
                     ))}
                   </div>
-                </>
+                </div>
               ) : (
-                /* EDIT SLIDE FORM */
-                <form onSubmit={handleSaveHeroSlide} className="p-5 sm:p-6 bg-[#13192f] rounded-2xl border border-[#273153] space-y-4 font-mono text-xs max-w-2xl">
+                /* Edit Slide Form */
+                <form onSubmit={handleSaveHeroSlide} className="p-5 bg-[#13192f] rounded-2xl border border-[#273153] space-y-4 max-w-xl">
                   <div className="flex items-center justify-between border-b border-[#273153] pb-3">
-                    <h3 className="text-sm font-bold text-white uppercase">
-                      {slideForm.id ? 'Edit Hero Slide' : 'Create New Hero Slide'}
-                    </h3>
-                    <button type="button" onClick={() => setIsEditingSlide(false)} className="text-slate-400 hover:text-white">
-                      <X className="w-5 h-5" />
-                    </button>
+                    <h3 className="font-bold text-white uppercase">{slideForm.id ? 'Edit Hero Slide' : 'Add Hero Slide'}</h3>
+                    <button type="button" onClick={() => setIsEditingSlide(false)} className="text-slate-400"><X className="w-5 h-5" /></button>
+                  </div>
+
+                  <input type="file" ref={heroFileInputRef} onChange={handleHeroFileUpload} accept="image/*,video/*" className="hidden" />
+
+                  <div>
+                    <label className="block text-slate-300 font-bold uppercase mb-1">Slide Media:</label>
+                    <div className="flex gap-3 items-center">
+                      <div className="w-28 h-20 rounded-lg overflow-hidden bg-black border border-[#273153] shrink-0">
+                        {slideForm.image ? (
+                          slideForm.mediaType === 'video' || slideForm.videoUrl ? (
+                            <video src={slideForm.videoUrl || slideForm.image} className="w-full h-full object-cover" />
+                          ) : (
+                            <img src={slideForm.image} alt="Slide Preview" className="w-full h-full object-cover" />
+                          )
+                        ) : (
+                          <div className="w-full h-full flex items-center justify-center text-slate-600"><ImageIcon className="w-6 h-6" /></div>
+                        )}
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => heroFileInputRef.current?.click()}
+                        className="px-4 py-2 bg-[#d4ff32] hover:bg-[#c1ec25] text-[#080b14] font-bold rounded-lg flex items-center gap-1.5 cursor-pointer"
+                      >
+                        <Upload className="w-3.5 h-3.5" />
+                        <span>Upload from Computer (Image/Video)</span>
+                      </button>
+                    </div>
                   </div>
 
                   <div>
@@ -1709,92 +1836,27 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                       type="text"
                       value={slideForm.title}
                       onChange={(e) => setSlideForm({ ...slideForm, title: e.target.value })}
-                      placeholder="OPEL POWERTRAIN SPECIALISTS"
-                      className="w-full bg-[#080b14] border border-[#273153] rounded-lg px-3.5 py-2 text-white"
+                      placeholder="e.g. OPEL POWERTRAIN SPECIALISTS"
+                      className="w-full bg-[#080b14] border border-[#273153] rounded-lg px-3 py-2 text-white outline-none font-bold"
                       required
                     />
                   </div>
 
-                  <div className="grid grid-cols-2 gap-3">
-                    <div>
-                      <label className="block text-slate-300 font-bold uppercase mb-1">Subtitle:</label>
-                      <input
-                        type="text"
-                        value={slideForm.subtitle}
-                        onChange={(e) => setSlideForm({ ...slideForm, subtitle: e.target.value })}
-                        placeholder="ABOSSEY OKAI STOCK"
-                        className="w-full bg-[#080b14] border border-[#273153] rounded-lg px-3.5 py-2 text-white"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-slate-300 font-bold uppercase mb-1">Badge:</label>
-                      <input
-                        type="text"
-                        value={slideForm.badge}
-                        onChange={(e) => setSlideForm({ ...slideForm, badge: e.target.value })}
-                        placeholder="SHOP DOOR E-3"
-                        className="w-full bg-[#080b14] border border-[#273153] rounded-lg px-3.5 py-2 text-white"
-                      />
-                    </div>
-                  </div>
-
-                  {/* Media Upload for Slide */}
-                  <div className="space-y-2 p-3.5 bg-[#080b14] rounded-xl border border-[#273153]">
-                    <div className="flex items-center justify-between">
-                      <span className="text-white font-bold">Slide Media (Image or Video &le;50s)</span>
-                      <input
-                        type="file"
-                        ref={heroFileInputRef}
-                        onChange={handleHeroFileUpload}
-                        accept="image/*,video/*"
-                        className="hidden"
-                      />
-                      <button
-                        type="button"
-                        onClick={() => heroFileInputRef.current?.click()}
-                        className="px-3 py-1.5 bg-[#13192f] hover:bg-[#18203d] text-[#d4ff32] border border-[#273153] rounded flex items-center gap-1"
-                      >
-                        <Upload className="w-3.5 h-3.5" />
-                        <span>Upload from PC</span>
-                      </button>
-                    </div>
-
-                    {slideForm.image && (
-                      <div className="relative aspect-[16/9] rounded-lg overflow-hidden bg-black border border-[#273153]">
-                        {slideForm.mediaType === 'video' || slideForm.videoUrl ? (
-                          <video src={slideForm.videoUrl || slideForm.image} controls className="w-full h-full object-cover" />
-                        ) : (
-                          <img src={slideForm.image} alt="Slide preview" className="w-full h-full object-cover" />
-                        )}
-                      </div>
-                    )}
-                  </div>
-
                   <div>
-                    <label className="block text-slate-300 font-bold uppercase mb-1">Description:</label>
-                    <textarea
-                      value={slideForm.description}
-                      onChange={(e) => setSlideForm({ ...slideForm, description: e.target.value })}
-                      rows={2}
-                      placeholder="Direct stockists of Opel engines..."
-                      className="w-full bg-[#080b14] border border-[#273153] rounded-lg p-3 text-white"
+                    <label className="block text-slate-300 font-bold uppercase mb-1">Subtitle:</label>
+                    <input
+                      type="text"
+                      value={slideForm.subtitle}
+                      onChange={(e) => setSlideForm({ ...slideForm, subtitle: e.target.value })}
+                      placeholder="e.g. ABOSSEY OKAI STOCK"
+                      className="w-full bg-[#080b14] border border-[#273153] rounded-lg px-3 py-2 text-white outline-none"
                     />
                   </div>
 
                   <div className="flex items-center justify-end gap-3 pt-3 border-t border-[#273153]">
-                    <button
-                      type="button"
-                      onClick={() => setIsEditingSlide(false)}
-                      className="px-4 py-2 bg-[#080b14] text-slate-300 rounded"
-                    >
-                      Cancel
-                    </button>
-                    <button
-                      type="submit"
-                      className="px-5 py-2 bg-[#d4ff32] text-[#080b14] font-extrabold uppercase rounded flex items-center gap-1.5"
-                    >
-                      <Check className="w-4 h-4" />
-                      <span>Save Slide</span>
+                    <button type="button" onClick={() => setIsEditingSlide(false)} className="px-4 py-2 bg-[#080b14] text-slate-300 rounded-lg">Cancel</button>
+                    <button type="submit" disabled={isSavingToFirestore} className="px-5 py-2 bg-[#d4ff32] text-[#080b14] font-bold uppercase rounded-lg">
+                      {isSavingToFirestore ? 'Saving...' : 'Save Slide to Firestore'}
                     </button>
                   </div>
                 </form>
@@ -1803,208 +1865,164 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
           )}
 
           {/* ==================================================== */}
-          {/* TAB 6: HOMEPAGE CONTENT & DEDICATED HOMEPAGE BACKGROUND */}
+          {/* TAB 6: HOMEPAGE BACKGROUND & HEADLINES */}
           {/* ==================================================== */}
           {activeTab === 'homepage' && (
-            <div className="space-y-6 max-w-4xl font-mono text-xs">
-              {/* Dedicated Homepage Background Image / Video Setting */}
-              <div className="p-5 sm:p-6 bg-[#13192f] rounded-2xl border border-[#273153] space-y-4">
+            <div className="space-y-6 font-mono text-xs">
+              {/* Dedicated Homepage Background Image / Video Section */}
+              <div className="p-5 bg-[#13192f] rounded-2xl border border-[#273153] space-y-4">
                 <div className="flex items-center justify-between flex-wrap gap-2">
                   <div>
-                    <div className="flex items-center gap-2">
+                    <h3 className="text-sm font-bold text-white uppercase flex items-center gap-2">
                       <MonitorPlay className="w-4 h-4 text-[#d4ff32]" />
-                      <h3 className="text-sm font-bold text-white uppercase">Homepage Background Media Setting</h3>
-                    </div>
-                    <p className="text-slate-400 text-[11px]">
-                      Upload a new background image or loop video from your computer. Automatically applied to the live storefront.
+                      <span>Homepage Background Image / Video</span>
+                    </h3>
+                    <p className="text-slate-400 text-[11px] mt-0.5">
+                      Upload and immediately use a custom high-resolution background or ambient video clip for the storefront.
                     </p>
                   </div>
-                  <div className="flex items-center gap-2">
-                    <input
-                      type="file"
-                      ref={bgImageInputRef}
-                      onChange={(e) => handleUploadHomepageBg(e, false)}
-                      accept="image/*"
-                      className="hidden"
-                    />
-                    <button
-                      onClick={() => bgImageInputRef.current?.click()}
-                      disabled={isUploadingToCloudinary}
-                      className="px-3 py-2 bg-[#080b14] hover:bg-[#18203d] text-[#d4ff32] border border-[#273153] hover:border-[#d4ff32]/50 rounded-lg flex items-center gap-1.5 transition-colors cursor-pointer"
-                    >
-                      <Upload className="w-3.5 h-3.5" />
-                      <span>Upload Background Image</span>
-                    </button>
-
-                    <input
-                      type="file"
-                      ref={bgVideoInputRef}
-                      onChange={(e) => handleUploadHomepageBg(e, true)}
-                      accept="video/*"
-                      className="hidden"
-                    />
-                    <button
-                      onClick={() => bgVideoInputRef.current?.click()}
-                      disabled={isUploadingToCloudinary}
-                      className="px-3 py-2 bg-[#080b14] hover:bg-[#18203d] text-emerald-300 border border-[#273153] hover:border-emerald-400/50 rounded-lg flex items-center gap-1.5 transition-colors cursor-pointer"
-                    >
-                      <Film className="w-3.5 h-3.5" />
-                      <span>Upload Background Video (Max 1m 30s)</span>
-                    </button>
-                  </div>
+                  <span className="px-2.5 py-0.5 rounded bg-[#080b14] text-slate-300 border border-[#273153] text-[10px]">
+                    Current Type: <strong className="text-[#d4ff32] uppercase">{homepageForm.homepageBackgroundType || 'image'}</strong>
+                  </span>
                 </div>
 
-                {/* Active Background Preview */}
-                <div className="p-4 bg-[#080b14] rounded-xl border border-[#273153] space-y-3">
-                  <div className="flex items-center justify-between">
-                    <span className="text-slate-400 text-[10px] uppercase font-bold">
-                      Current Background Mode: <strong className="text-white uppercase">{homepageForm.homepageBackgroundType || 'image'}</strong>
-                    </span>
-                    <button
-                      onClick={() => {
-                        const resetBg = {
-                          ...homepageForm,
-                          homepageBackgroundType: 'image' as const,
-                          homepageBackgroundImage: STOREFRONT_IMAGE,
-                          homepageBackgroundVideo: ''
-                        };
-                        setHomepageForm(resetBg);
-                        dataService.saveHomepageContent(resetBg);
-                        onDataChanged();
-                        showFeedback('Restored original Abossey Okai storefront backdrop.');
-                      }}
-                      className="text-[#d4ff32] hover:underline text-[11px]"
-                    >
-                      Reset to Abossey Okai Storefront Photo
-                    </button>
+                <input type="file" ref={bgImageInputRef} onChange={(e) => handleUploadHomepageBg(e, false)} accept="image/*" className="hidden" />
+                <input type="file" ref={bgVideoInputRef} onChange={(e) => handleUploadHomepageBg(e, true)} accept="video/*" className="hidden" />
+
+                <div className="grid grid-cols-1 md:grid-cols-12 gap-5 items-center p-4 bg-[#080b14] rounded-xl border border-[#273153]">
+                  <div className="md:col-span-5 aspect-video rounded-lg overflow-hidden bg-black border border-[#273153] relative">
+                    {homepageForm.homepageBackgroundType === 'video' && homepageForm.homepageBackgroundVideo ? (
+                      <video src={homepageForm.homepageBackgroundVideo} autoPlay muted loop className="w-full h-full object-cover" />
+                    ) : (
+                      <img src={homepageForm.homepageBackgroundImage || STOREFRONT_IMAGE} alt="Homepage Background" className="w-full h-full object-cover" />
+                    )}
                   </div>
 
-                  <div className="relative aspect-[21/9] sm:aspect-[16/7] rounded-xl overflow-hidden bg-black border border-[#273153]">
-                    {homepageForm.homepageBackgroundType === 'video' && homepageForm.homepageBackgroundVideo ? (
-                      <video
-                        src={homepageForm.homepageBackgroundVideo}
-                        autoPlay
-                        muted
-                        loop
-                        playsInline
-                        className="w-full h-full object-cover"
-                      />
-                    ) : (
-                      <img
-                        src={homepageForm.homepageBackgroundImage || STOREFRONT_IMAGE}
-                        alt="Storefront Background"
-                        className="w-full h-full object-cover"
-                      />
-                    )}
-                    <div className="absolute inset-0 bg-gradient-to-r from-black/60 via-black/40 to-transparent flex items-center p-6">
-                      <div className="text-white space-y-1">
-                        <span className="text-[#d4ff32] text-[10px] font-bold uppercase">{businessInfo.name}</span>
-                        <h4 className="text-lg font-black uppercase font-heading">{homepageForm.heroHeadlineHighlight || 'OPEL ENGINES'}</h4>
-                        <p className="text-xs text-slate-300 font-mono">{businessInfo.location}</p>
-                      </div>
+                  <div className="md:col-span-7 space-y-3">
+                    <p className="text-slate-300 text-xs leading-relaxed">
+                      Upload from your local computer. The uploaded file is stored in Cloudinary and immediately synced to Cloud Firestore as the global homepage backdrop.
+                    </p>
+
+                    <div className="flex flex-wrap gap-2 pt-1">
+                      <button
+                        type="button"
+                        onClick={() => bgImageInputRef.current?.click()}
+                        disabled={isUploadingToCloudinary}
+                        className="px-4 py-2 bg-[#d4ff32] hover:bg-[#c1ec25] text-[#080b14] font-bold rounded-lg flex items-center gap-1.5 transition-colors cursor-pointer"
+                      >
+                        <Upload className="w-3.5 h-3.5" />
+                        <span>Upload Background Image</span>
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => bgVideoInputRef.current?.click()}
+                        disabled={isUploadingToCloudinary}
+                        className="px-4 py-2 bg-[#13192f] hover:bg-[#18203d] text-slate-200 border border-[#273153] font-bold rounded-lg flex items-center gap-1.5 transition-colors cursor-pointer"
+                      >
+                        <Film className="w-3.5 h-3.5 text-[#d4ff32]" />
+                        <span>Upload Background Video (Max 50s)</span>
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={async () => {
+                          const updated: HomepageContent = {
+                            ...homepageForm,
+                            homepageBackgroundType: 'image',
+                            homepageBackgroundImage: STOREFRONT_IMAGE,
+                            homepageBackgroundVideo: ''
+                          };
+                          setHomepageForm(updated);
+                          await dataService.saveHomepageContent(updated);
+                          showFeedback('Restored original Abossey Okai storefront photo.');
+                        }}
+                        className="px-3 py-2 bg-[#080b14] hover:bg-[#18203d] text-slate-400 hover:text-white border border-[#273153] rounded-lg transition-colors cursor-pointer"
+                        title="Restore Default Storefront Background"
+                      >
+                        <RotateCcw className="w-3.5 h-3.5" />
+                      </button>
                     </div>
                   </div>
                 </div>
               </div>
 
-              {/* Homepage Text Headlines & Section Copy */}
+              {/* Homepage Headlines & Content Form */}
               <form
-                onSubmit={(e) => {
+                onSubmit={async (e) => {
                   e.preventDefault();
-                  dataService.saveHomepageContent(homepageForm);
-                  onDataChanged();
-                  showFeedback('Homepage content and headlines saved!');
+                  setIsSavingToFirestore(true);
+                  try {
+                    await dataService.saveHomepageContent(homepageForm);
+                    showFeedback('Homepage headlines & section text saved to Cloud Firestore!');
+                  } catch (err: any) {
+                    showFeedback(err.message || 'Failed to save homepage content', true);
+                  } finally {
+                    setIsSavingToFirestore(false);
+                  }
                 }}
-                className="p-5 sm:p-6 bg-[#13192f] rounded-2xl border border-[#273153] space-y-5"
+                className="p-5 bg-[#13192f] rounded-2xl border border-[#273153] space-y-4"
               >
-                <h3 className="text-sm font-bold text-white uppercase flex items-center gap-2">
-                  <Edit2 className="w-4 h-4 text-[#d4ff32]" />
-                  <span>Homepage Headlines &amp; Section Descriptions</span>
-                </h3>
+                <h3 className="text-sm font-bold text-white uppercase">Section Headlines &amp; Descriptions</h3>
 
                 <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                   <div>
-                    <label className="block text-slate-400 uppercase text-[10px] font-bold mb-1">Prefix:</label>
+                    <label className="block text-slate-400 uppercase text-[10px] font-bold mb-1">Hero Prefix</label>
                     <input
                       type="text"
-                      value={homepageForm.heroHeadlinePrefix}
+                      value={homepageForm.heroHeadlinePrefix || ''}
                       onChange={(e) => setHomepageForm({ ...homepageForm, heroHeadlinePrefix: e.target.value })}
-                      className="w-full bg-[#080b14] border border-[#273153] rounded px-3 py-2 text-white"
+                      className="w-full bg-[#080b14] border border-[#273153] rounded p-2 text-white outline-none"
                     />
                   </div>
                   <div>
-                    <label className="block text-slate-400 uppercase text-[10px] font-bold mb-1">Highlight:</label>
+                    <label className="block text-slate-400 uppercase text-[10px] font-bold mb-1">Highlight (Lime)</label>
                     <input
                       type="text"
-                      value={homepageForm.heroHeadlineHighlight}
+                      value={homepageForm.heroHeadlineHighlight || ''}
                       onChange={(e) => setHomepageForm({ ...homepageForm, heroHeadlineHighlight: e.target.value })}
-                      className="w-full bg-[#080b14] border border-[#273153] rounded px-3 py-2 text-white font-bold text-[#d4ff32]"
+                      className="w-full bg-[#080b14] border border-[#273153] rounded p-2 text-[#d4ff32] font-bold outline-none"
                     />
                   </div>
                   <div>
-                    <label className="block text-slate-400 uppercase text-[10px] font-bold mb-1">Suffix:</label>
+                    <label className="block text-slate-400 uppercase text-[10px] font-bold mb-1">Hero Suffix</label>
                     <input
                       type="text"
-                      value={homepageForm.heroHeadlineSuffix}
+                      value={homepageForm.heroHeadlineSuffix || ''}
                       onChange={(e) => setHomepageForm({ ...homepageForm, heroHeadlineSuffix: e.target.value })}
-                      className="w-full bg-[#080b14] border border-[#273153] rounded px-3 py-2 text-white"
+                      className="w-full bg-[#080b14] border border-[#273153] rounded p-2 text-white outline-none"
                     />
                   </div>
                 </div>
 
-                <div>
-                  <label className="block text-slate-400 uppercase text-[10px] font-bold mb-1">Location Subtitle:</label>
-                  <input
-                    type="text"
-                    value={homepageForm.heroLocationSubtitle}
-                    onChange={(e) => setHomepageForm({ ...homepageForm, heroLocationSubtitle: e.target.value })}
-                    className="w-full bg-[#080b14] border border-[#273153] rounded px-3 py-2 text-white"
-                  />
-                </div>
-
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pt-2">
-                  <div className="space-y-3 p-3.5 bg-[#080b14] rounded-xl border border-[#273153]">
-                    <span className="text-white font-bold block">Featured Section Copy</span>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-slate-400 uppercase text-[10px] font-bold mb-1">About Section Headline</label>
                     <input
                       type="text"
-                      value={homepageForm.featuredTitle}
-                      onChange={(e) => setHomepageForm({ ...homepageForm, featuredTitle: e.target.value })}
-                      placeholder="Featured Section Title"
-                      className="w-full bg-[#13192f] border border-[#273153] rounded px-3 py-2 text-white"
-                    />
-                    <textarea
-                      value={homepageForm.featuredSubtitle}
-                      onChange={(e) => setHomepageForm({ ...homepageForm, featuredSubtitle: e.target.value })}
-                      rows={2}
-                      className="w-full bg-[#13192f] border border-[#273153] rounded p-2 text-white"
-                    />
-                  </div>
-
-                  <div className="space-y-3 p-3.5 bg-[#080b14] rounded-xl border border-[#273153]">
-                    <span className="text-white font-bold block">About Shop Verification Copy</span>
-                    <input
-                      type="text"
-                      value={homepageForm.aboutHeadline}
+                      value={homepageForm.aboutHeadline || ''}
                       onChange={(e) => setHomepageForm({ ...homepageForm, aboutHeadline: e.target.value })}
-                      placeholder="About Headline"
-                      className="w-full bg-[#13192f] border border-[#273153] rounded px-3 py-2 text-white"
+                      className="w-full bg-[#080b14] border border-[#273153] rounded p-2 text-white outline-none"
                     />
-                    <textarea
-                      value={homepageForm.aboutDescription}
-                      onChange={(e) => setHomepageForm({ ...homepageForm, aboutDescription: e.target.value })}
-                      rows={2}
-                      className="w-full bg-[#13192f] border border-[#273153] rounded p-2 text-white"
+                  </div>
+                  <div>
+                    <label className="block text-slate-400 uppercase text-[10px] font-bold mb-1">CTA Assistance Headline</label>
+                    <input
+                      type="text"
+                      value={homepageForm.ctaHeadline || ''}
+                      onChange={(e) => setHomepageForm({ ...homepageForm, ctaHeadline: e.target.value })}
+                      className="w-full bg-[#080b14] border border-[#273153] rounded p-2 text-white outline-none"
                     />
                   </div>
                 </div>
 
-                <div className="flex justify-end pt-3">
+                <div className="flex justify-end pt-2">
                   <button
                     type="submit"
-                    className="px-6 py-2.5 bg-[#d4ff32] hover:bg-[#c1ec25] text-[#080b14] font-extrabold uppercase rounded-lg transition-colors cursor-pointer flex items-center gap-1.5"
+                    disabled={isSavingToFirestore}
+                    className="px-6 py-2.5 bg-[#d4ff32] hover:bg-[#c1ec25] text-[#080b14] font-extrabold uppercase rounded-lg transition-colors cursor-pointer"
                   >
-                    <Check className="w-4 h-4" />
-                    <span>Save Homepage Copy</span>
+                    {isSavingToFirestore ? 'Saving to Firestore...' : 'Save Headlines to Firestore'}
                   </button>
                 </div>
               </form>
@@ -2012,158 +2030,90 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
           )}
 
           {/* ==================================================== */}
-          {/* TAB 7: VIDEO PLACEMENTS & CONTROLS MANAGER */}
+          {/* TAB 7: VIDEO PLACEMENTS & PLAYBACK CONTROLS */}
           {/* ==================================================== */}
           {activeTab === 'placements' && (
-            <div className="space-y-6 max-w-4xl font-mono text-xs">
-              <div className="p-5 sm:p-6 bg-[#13192f] rounded-2xl border border-[#273153] space-y-4">
-                <div className="flex items-center justify-between">
-                  <div>
-                    <div className="flex items-center gap-2">
-                      <Video className="w-4 h-4 text-[#d4ff32]" />
-                      <h3 className="text-sm font-bold text-white uppercase">Website Video Placements &amp; Controls</h3>
-                    </div>
-                    <p className="text-slate-400 text-[11px]">
-                      Place an uploaded video anywhere on the website. Configure autoplay, audio muting, loop, controls, and active state per section.
-                    </p>
-                  </div>
+            <div className="space-y-6 font-mono text-xs">
+              <div className="p-5 bg-[#13192f] rounded-2xl border border-[#273153] space-y-4">
+                <div>
+                  <h3 className="text-sm font-bold text-white uppercase flex items-center gap-2">
+                    <Video className="w-4 h-4 text-[#d4ff32]" />
+                    <span>Website Video Placements &amp; Playback Controls</span>
+                  </h3>
+                  <p className="text-slate-400 text-[11px] mt-0.5">
+                    Assign videos to specific website sections with granular autoplay, mute, loop, and control settings.
+                  </p>
                 </div>
 
-                {/* Video Placements Cards */}
-                <div className="space-y-4">
-                  {(homepageForm.videoPlacements || []).map((placement) => (
-                    <div
-                      key={placement.id}
-                      className="p-4 bg-[#080b14] rounded-xl border border-[#273153] space-y-3"
-                    >
-                      <div className="flex items-center justify-between flex-wrap gap-2">
-                        <div className="flex items-center gap-2">
-                          <Film className="w-4 h-4 text-[#d4ff32]" />
-                          <div>
-                            <span className="text-white font-bold text-sm block">{placement.name}</span>
-                            <span className="text-slate-400 text-[10px]">Location: {placement.location}</span>
-                          </div>
+                <div className="space-y-4 pt-2">
+                  {(homepageForm.videoPlacements || []).map((plc) => (
+                    <div key={plc.id} className="p-4 bg-[#080b14] rounded-xl border border-[#273153] space-y-3">
+                      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-[#273153] pb-2">
+                        <div>
+                          <span className="font-bold text-white text-sm block">{plc.name}</span>
+                          <span className="text-[#d4ff32] text-[10px]">{plc.location}</span>
                         </div>
-
-                        <label className="flex items-center gap-2 cursor-pointer">
+                        <label className="flex items-center gap-1.5 cursor-pointer text-slate-300 font-bold">
                           <input
                             type="checkbox"
-                            checked={placement.enabled}
-                            onChange={(e) => {
-                              handleSavePlacement({ ...placement, enabled: e.target.checked });
-                            }}
-                            className="rounded border-[#273153] bg-[#13192f] text-[#d4ff32]"
+                            checked={plc.enabled}
+                            onChange={(e) => handleSavePlacement({ ...plc, enabled: e.target.checked })}
+                            className="rounded border-[#273153] bg-[#13192f] text-[#d4ff32] focus:ring-0"
                           />
-                          <span className={`font-bold text-[11px] ${placement.enabled ? 'text-[#d4ff32]' : 'text-slate-500'}`}>
-                            {placement.enabled ? 'ENABLED' : 'DISABLED'}
-                          </span>
+                          <span>Enable Video in this Section</span>
                         </label>
                       </div>
 
-                      {/* Video URL & Selector */}
-                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 pt-2">
-                        <div className="sm:col-span-2">
-                          <label className="block text-slate-400 uppercase text-[10px] font-bold mb-1">
-                            Video Cloudinary URL:
-                          </label>
+                      <div className="grid grid-cols-1 md:grid-cols-12 gap-3 items-center">
+                        <div className="md:col-span-8">
+                          <label className="block text-slate-400 text-[10px] uppercase font-bold mb-1">Cloudinary Video URL:</label>
                           <input
                             type="text"
-                            value={placement.videoUrl}
-                            onChange={(e) => {
-                              handleSavePlacement({ ...placement, videoUrl: e.target.value });
-                            }}
+                            value={plc.videoUrl}
+                            onChange={(e) => handleSavePlacement({ ...plc, videoUrl: e.target.value })}
                             placeholder="https://res.cloudinary.com/zpzdjznd/video/upload/..."
-                            className="w-full bg-[#13192f] border border-[#273153] rounded px-3 py-2 text-white font-mono text-[11px]"
+                            className="w-full bg-[#13192f] border border-[#273153] focus:border-[#d4ff32] rounded p-2 text-white outline-none"
                           />
                         </div>
-
-                        <div>
-                          <label className="block text-slate-400 uppercase text-[10px] font-bold mb-1">
-                            Assign From Library:
+                        <div className="md:col-span-4 flex flex-wrap gap-4 pt-4 md:pt-0">
+                          <label className="flex items-center gap-1.5 text-slate-300 cursor-pointer">
+                            <input
+                              type="checkbox"
+                              checked={plc.autoplay}
+                              onChange={(e) => handleSavePlacement({ ...plc, autoplay: e.target.checked })}
+                              className="rounded border-[#273153] bg-[#13192f] text-[#d4ff32]"
+                            />
+                            <span>Autoplay</span>
                           </label>
-                          <select
-                            value={placement.videoUrl}
-                            onChange={(e) => {
-                              const chosen = mediaItems.find(m => m.url === e.target.value);
-                              handleSavePlacement({
-                                ...placement,
-                                videoUrl: e.target.value,
-                                publicId: chosen?.publicId,
-                                duration: chosen?.duration,
-                                enabled: !!e.target.value
-                              });
-                            }}
-                            className="w-full bg-[#13192f] border border-[#273153] rounded px-3 py-2 text-white text-[11px]"
-                          >
-                            <option value="">-- Select from Media Library --</option>
-                            {mediaItems
-                              .filter(m => m.mediaType === 'video' || isVideoFile(new File([], m.originalFilename)))
-                              .map(m => (
-                                <option key={m.id} value={m.url}>
-                                  {m.originalFilename} {m.duration ? `(${Math.round(m.duration)}s)` : ''}
-                                </option>
-                              ))}
-                          </select>
+                          <label className="flex items-center gap-1.5 text-slate-300 cursor-pointer">
+                            <input
+                              type="checkbox"
+                              checked={plc.muted}
+                              onChange={(e) => handleSavePlacement({ ...plc, muted: e.target.checked })}
+                              className="rounded border-[#273153] bg-[#13192f] text-[#d4ff32]"
+                            />
+                            <span>Muted</span>
+                          </label>
+                          <label className="flex items-center gap-1.5 text-slate-300 cursor-pointer">
+                            <input
+                              type="checkbox"
+                              checked={plc.loop}
+                              onChange={(e) => handleSavePlacement({ ...plc, loop: e.target.checked })}
+                              className="rounded border-[#273153] bg-[#13192f] text-[#d4ff32]"
+                            />
+                            <span>Loop</span>
+                          </label>
+                          <label className="flex items-center gap-1.5 text-slate-300 cursor-pointer">
+                            <input
+                              type="checkbox"
+                              checked={plc.controls}
+                              onChange={(e) => handleSavePlacement({ ...plc, controls: e.target.checked })}
+                              className="rounded border-[#273153] bg-[#13192f] text-[#d4ff32]"
+                            />
+                            <span>Controls</span>
+                          </label>
                         </div>
                       </div>
-
-                      {/* Video Player Configuration Toggles */}
-                      <div className="p-3 bg-[#13192f] rounded-lg border border-[#273153] grid grid-cols-2 sm:grid-cols-4 gap-3">
-                        <label className="flex items-center gap-2 cursor-pointer">
-                          <input
-                            type="checkbox"
-                            checked={placement.autoplay}
-                            onChange={(e) => handleSavePlacement({ ...placement, autoplay: e.target.checked })}
-                            className="rounded border-[#273153] bg-[#080b14] text-[#d4ff32]"
-                          />
-                          <span className="text-slate-300 text-[11px]">Autoplay</span>
-                        </label>
-
-                        <label className="flex items-center gap-2 cursor-pointer">
-                          <input
-                            type="checkbox"
-                            checked={placement.muted}
-                            onChange={(e) => handleSavePlacement({ ...placement, muted: e.target.checked })}
-                            className="rounded border-[#273153] bg-[#080b14] text-[#d4ff32]"
-                          />
-                          <span className="text-slate-300 text-[11px]">Muted</span>
-                        </label>
-
-                        <label className="flex items-center gap-2 cursor-pointer">
-                          <input
-                            type="checkbox"
-                            checked={placement.loop}
-                            onChange={(e) => handleSavePlacement({ ...placement, loop: e.target.checked })}
-                            className="rounded border-[#273153] bg-[#080b14] text-[#d4ff32]"
-                          />
-                          <span className="text-slate-300 text-[11px]">Loop</span>
-                        </label>
-
-                        <label className="flex items-center gap-2 cursor-pointer">
-                          <input
-                            type="checkbox"
-                            checked={placement.controls}
-                            onChange={(e) => handleSavePlacement({ ...placement, controls: e.target.checked })}
-                            className="rounded border-[#273153] bg-[#080b14] text-[#d4ff32]"
-                          />
-                          <span className="text-slate-300 text-[11px]">Show Controls</span>
-                        </label>
-                      </div>
-
-                      {/* Interactive Preview if URL is set */}
-                      {placement.videoUrl && (
-                        <div className="relative aspect-[16/8] max-w-md rounded-lg overflow-hidden bg-black border border-[#273153]">
-                          <video
-                            src={placement.videoUrl}
-                            autoPlay={placement.autoplay}
-                            muted={placement.muted}
-                            loop={placement.loop}
-                            controls={placement.controls}
-                            playsInline
-                            className="w-full h-full object-cover"
-                          />
-                        </div>
-                      )}
                     </div>
                   ))}
                 </div>
@@ -2172,12 +2122,13 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
           )}
 
           {/* ==================================================== */}
-          {/* TAB 8: MEDIA LIBRARY (BOTH IMAGES AND VIDEOS) */}
+          {/* TAB 8: MEDIA LIBRARY (IMAGES + VIDEOS TO CLOUDINARY) */}
           {/* ==================================================== */}
           {activeTab === 'media' && (
-            <div className="space-y-6">
-              {/* Media Library Toolbar */}
-              <div className="p-4 sm:p-5 bg-[#13192f] rounded-2xl border border-[#273153] space-y-4 font-mono text-xs">
+            <div className="space-y-6 font-mono text-xs">
+              <input type="file" ref={mediaFileInputRef} onChange={handleUploadMediaFile} accept="image/*,video/*" multiple className="hidden" />
+
+              <div className="p-5 bg-[#13192f] rounded-2xl border border-[#273153] space-y-4">
                 <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3">
                   <div>
                     <h3 className="text-sm font-bold text-white uppercase flex items-center gap-2">
@@ -2185,161 +2136,132 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                       <span>Cloudinary Media Library (Images + Videos)</span>
                     </h3>
                     <p className="text-slate-400 text-[11px]">
-                      Upload images and up to 1 min 30 secs (90-second) videos directly from your local computer.
+                      Upload images and up to 50-second videos directly from your local computer.
                     </p>
                   </div>
 
                   <div className="flex items-center gap-2">
-                    <input
-                      type="file"
-                      ref={mediaFileInputRef}
-                      onChange={(e) => handleUploadMediaFile(e)}
-                      multiple
-                      accept="image/*,video/*"
-                      className="hidden"
-                    />
                     <button
+                      type="button"
                       onClick={() => mediaFileInputRef.current?.click()}
                       disabled={isUploadingMedia}
-                      className="px-4 py-2 bg-[#d4ff32] hover:bg-[#c1ec25] text-[#080b14] font-extrabold uppercase rounded-lg flex items-center gap-1.5 transition-colors cursor-pointer"
+                      className="px-4 py-2 bg-[#d4ff32] hover:bg-[#c1ec25] text-[#080b14] font-bold uppercase rounded-lg flex items-center gap-1.5 transition-colors cursor-pointer disabled:opacity-50"
                     >
-                      <Upload className="w-4 h-4" />
-                      <span>Upload Files from PC</span>
+                      <Upload className="w-3.5 h-3.5" />
+                      <span>Upload Media from Local PC</span>
                     </button>
                   </div>
                 </div>
 
-                {/* Filters & Search */}
-                <div className="flex flex-wrap items-center justify-between gap-3 pt-2 border-t border-[#273153]">
+                {/* Filters */}
+                <div className="flex flex-wrap items-center justify-between gap-3 pt-2">
                   <div className="flex items-center gap-2">
                     <button
+                      type="button"
                       onClick={() => setMediaTypeFilter('all')}
-                      className={`px-3 py-1.5 rounded text-[11px] font-bold transition-colors cursor-pointer ${
-                        mediaTypeFilter === 'all' ? 'bg-[#d4ff32] text-[#080b14]' : 'bg-[#080b14] text-slate-300'
+                      className={`px-3 py-1.5 rounded-lg border text-xs cursor-pointer ${
+                        mediaTypeFilter === 'all' ? 'bg-[#d4ff32] text-[#080b14] border-[#d4ff32] font-bold' : 'bg-[#080b14] text-slate-400 border-[#273153]'
                       }`}
                     >
-                      All Assets ({mediaItems.length})
+                      All ({mediaItems.length})
                     </button>
                     <button
+                      type="button"
                       onClick={() => setMediaTypeFilter('image')}
-                      className={`px-3 py-1.5 rounded text-[11px] font-bold transition-colors cursor-pointer ${
-                        mediaTypeFilter === 'image' ? 'bg-[#d4ff32] text-[#080b14]' : 'bg-[#080b14] text-slate-300'
+                      className={`px-3 py-1.5 rounded-lg border text-xs cursor-pointer ${
+                        mediaTypeFilter === 'image' ? 'bg-[#d4ff32] text-[#080b14] border-[#d4ff32] font-bold' : 'bg-[#080b14] text-slate-400 border-[#273153]'
                       }`}
                     >
-                      Images Only ({mediaItems.filter(m => m.mediaType !== 'video').length})
+                      Images ({mediaItems.filter(m => m.mediaType !== 'video').length})
                     </button>
                     <button
+                      type="button"
                       onClick={() => setMediaTypeFilter('video')}
-                      className={`px-3 py-1.5 rounded text-[11px] font-bold transition-colors cursor-pointer ${
-                        mediaTypeFilter === 'video' ? 'bg-[#d4ff32] text-[#080b14]' : 'bg-[#080b14] text-slate-300'
+                      className={`px-3 py-1.5 rounded-lg border text-xs cursor-pointer ${
+                        mediaTypeFilter === 'video' ? 'bg-[#d4ff32] text-[#080b14] border-[#d4ff32] font-bold' : 'bg-[#080b14] text-slate-400 border-[#273153]'
                       }`}
                     >
-                      Videos Only ({mediaItems.filter(m => m.mediaType === 'video').length})
+                      Videos ({mediaItems.filter(m => m.mediaType === 'video').length})
                     </button>
                   </div>
 
-                  <div className="relative flex-1 max-w-xs">
-                    <Search className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+                  <div className="relative w-64">
+                    <Search className="w-3.5 h-3.5 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
                     <input
                       type="text"
                       value={mediaSearch}
                       onChange={(e) => setMediaSearch(e.target.value)}
-                      placeholder="Search filenames..."
-                      className="w-full pl-8 pr-3 py-1.5 bg-[#080b14] border border-[#273153] rounded text-white text-[11px] outline-none"
+                      placeholder="Filter files..."
+                      className="w-full bg-[#080b14] border border-[#273153] rounded-lg pl-8 pr-3 py-1.5 text-white outline-none"
                     />
                   </div>
                 </div>
-              </div>
 
-              {/* Media Grid */}
-              <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-4 font-mono text-xs">
-                {filteredMedia.map((item) => {
-                  const isVideo = item.mediaType === 'video';
-                  return (
-                    <div
-                      key={item.id}
-                      className="bg-[#13192f] rounded-xl border border-[#273153] overflow-hidden flex flex-col group hover:border-[#d4ff32]/50 transition-colors"
-                    >
-                      {/* Media Thumbnail Box */}
-                      <div className="relative aspect-[4/3] bg-black overflow-hidden flex items-center justify-center">
-                        {isVideo ? (
-                          <div className="relative w-full h-full">
-                            <video
-                              src={item.url}
-                              className="w-full h-full object-cover"
-                              preload="metadata"
-                            />
-                            <div className="absolute inset-0 bg-black/40 flex items-center justify-center">
-                              <span className="p-2 rounded-full bg-[#d4ff32] text-[#080b14] shadow-lg">
-                                <Play className="w-4 h-4 fill-current" />
-                              </span>
-                            </div>
-                            {item.duration && (
-                              <span className="absolute bottom-1.5 right-1.5 px-1.5 py-0.5 rounded bg-black/90 text-[#d4ff32] text-[9px] font-bold">
-                                {Math.round(item.duration)}s
-                              </span>
-                            )}
-                          </div>
-                        ) : (
-                          <img src={item.url} alt={item.originalFilename} className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300" />
-                        )}
-
-                        <span className="absolute top-1.5 left-1.5 px-1.5 py-0.5 rounded bg-black/80 text-white text-[9px] uppercase font-bold border border-[#273153]">
-                          {item.format || (isVideo ? 'mp4' : 'jpg')}
-                        </span>
-                      </div>
-
-                      {/* Details & Actions */}
-                      <div className="p-3 space-y-2 flex-1 flex flex-col justify-between">
-                        <div>
-                          <span className="text-white font-bold text-[11px] block truncate" title={item.originalFilename}>
-                            {item.originalFilename}
-                          </span>
-                          {item.locationUsed && (
-                            <span className="text-slate-400 text-[10px] block truncate">
-                              Used: {item.locationUsed}
+                {/* Media Cards Grid */}
+                <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-3 pt-2">
+                  {filteredMedia.map((m) => {
+                    const isVid = m.mediaType === 'video';
+                    return (
+                      <div key={m.id} className="p-2.5 bg-[#080b14] rounded-xl border border-[#273153] space-y-2 group">
+                        <div className="aspect-square rounded-lg overflow-hidden bg-black relative flex items-center justify-center">
+                          {isVid ? (
+                            <video src={m.url} className="w-full h-full object-cover" />
+                          ) : (
+                            <img src={m.url} alt={m.originalFilename} className="w-full h-full object-cover" />
+                          )}
+                          {isVid && (
+                            <span className="absolute bottom-1.5 right-1.5 px-1.5 py-0.5 rounded bg-[#080b14]/90 text-[#d4ff32] text-[9px] font-bold flex items-center gap-0.5">
+                              <Play className="w-2 h-2 fill-current" /> {m.duration ? `${Math.round(m.duration)}s` : 'VID'}
                             </span>
                           )}
                         </div>
 
-                        <div className="pt-2 border-t border-[#273153] flex items-center justify-between gap-1">
-                          <button
-                            onClick={() => setPreviewMediaModal(item)}
-                            className="p-1.5 bg-[#080b14] hover:bg-[#18203d] text-[#d4ff32] rounded border border-[#273153]"
-                            title="Preview Media"
-                          >
-                            <Eye className="w-3.5 h-3.5" />
-                          </button>
+                        <div>
+                          <span className="font-bold text-white text-[11px] block truncate" title={m.originalFilename}>
+                            {m.originalFilename}
+                          </span>
+                          <span className="text-slate-500 text-[9px] block truncate">{m.locationUsed || 'Media Library'}</span>
+                        </div>
 
+                        <div className="flex items-center justify-between pt-1 border-t border-[#273153]">
                           <button
+                            type="button"
                             onClick={() => {
-                              navigator.clipboard.writeText(item.url);
+                              navigator.clipboard.writeText(m.url);
                               showFeedback('Copied Cloudinary URL to clipboard!');
                             }}
-                            className="p-1.5 bg-[#080b14] hover:bg-[#18203d] text-slate-300 rounded border border-[#273153]"
+                            className="p-1 text-slate-400 hover:text-white"
                             title="Copy Cloudinary URL"
                           >
                             <Copy className="w-3.5 h-3.5" />
                           </button>
-
+                          <a
+                            href={m.url}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="p-1 text-slate-400 hover:text-[#d4ff32]"
+                            title="Open direct file"
+                          >
+                            <ExternalLink className="w-3.5 h-3.5" />
+                          </a>
                           <button
-                            onClick={() => {
-                              if (window.confirm(`Delete media asset "${item.originalFilename}"?`)) {
-                                dataService.deleteMediaItem(item.id);
-                                onDataChanged();
-                                showFeedback('Media asset removed.');
+                            type="button"
+                            onClick={async () => {
+                              if (window.confirm(`Delete "${m.originalFilename}" from Firestore media registry?`)) {
+                                await dataService.deleteMediaItem(m.id);
+                                showFeedback('Media item deleted from registry.');
                               }
                             }}
-                            className="p-1.5 bg-[#080b14] hover:bg-red-950 text-slate-400 hover:text-red-400 rounded border border-[#273153]"
-                            title="Delete Media Asset"
+                            className="p-1 text-slate-400 hover:text-red-400"
+                            title="Delete Media Record"
                           >
                             <Trash2 className="w-3.5 h-3.5" />
                           </button>
                         </div>
                       </div>
-                    </div>
-                  );
-                })}
+                    );
+                  })}
+                </div>
               </div>
             </div>
           )}
@@ -2348,78 +2270,95 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
           {/* TAB 9: BUSINESS INFORMATION */}
           {/* ==================================================== */}
           {activeTab === 'business' && (
-            <div className="space-y-6 max-w-3xl font-mono text-xs">
+            <div className="space-y-6 font-mono text-xs max-w-2xl">
               <form
-                onSubmit={(e) => {
+                onSubmit={async (e) => {
                   e.preventDefault();
-                  dataService.saveBusinessInfo(businessForm);
-                  onDataChanged();
-                  showFeedback('Business information saved successfully!');
+                  setIsSavingToFirestore(true);
+                  try {
+                    await dataService.saveBusinessInfo(businessForm);
+                    showFeedback('Business information saved to Cloud Firestore!');
+                  } catch (err: any) {
+                    showFeedback(err.message || 'Failed to save business info', true);
+                  } finally {
+                    setIsSavingToFirestore(false);
+                  }
                 }}
-                className="p-5 sm:p-6 bg-[#13192f] rounded-2xl border border-[#273153] space-y-4"
+                className="p-5 bg-[#13192f] rounded-2xl border border-[#273153] space-y-4"
               >
                 <h3 className="text-sm font-bold text-white uppercase flex items-center gap-2">
                   <Building className="w-4 h-4 text-[#d4ff32]" />
-                  <span>Physical Store Verification &amp; Credentials</span>
+                  <span>Business Contact &amp; Credentials</span>
                 </h3>
 
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                   <div>
-                    <label className="block text-slate-400 uppercase text-[10px] font-bold mb-1">Trading Name:</label>
+                    <label className="block text-slate-400 text-[10px] uppercase font-bold mb-1">Company Name</label>
                     <input
                       type="text"
                       value={businessForm.name}
                       onChange={(e) => setBusinessForm({ ...businessForm, name: e.target.value })}
-                      className="w-full bg-[#080b14] border border-[#273153] rounded px-3 py-2 text-white font-bold"
-                      required
+                      className="w-full bg-[#080b14] border border-[#273153] rounded p-2 text-white font-bold outline-none"
                     />
                   </div>
                   <div>
-                    <label className="block text-slate-400 uppercase text-[10px] font-bold mb-1">Proprietor / Owner:</label>
+                    <label className="block text-slate-400 text-[10px] uppercase font-bold mb-1">Proprietor / Lead</label>
                     <input
                       type="text"
                       value={businessForm.owner}
                       onChange={(e) => setBusinessForm({ ...businessForm, owner: e.target.value })}
-                      className="w-full bg-[#080b14] border border-[#273153] rounded px-3 py-2 text-white font-bold text-[#d4ff32]"
-                      required
+                      className="w-full bg-[#080b14] border border-[#273153] rounded p-2 text-[#d4ff32] font-bold outline-none"
                     />
                   </div>
+                </div>
+
+                <div>
+                  <label className="block text-slate-400 text-[10px] uppercase font-bold mb-1">Business Description</label>
+                  <input
+                    type="text"
+                    value={businessForm.description}
+                    onChange={(e) => setBusinessForm({ ...businessForm, description: e.target.value })}
+                    className="w-full bg-[#080b14] border border-[#273153] rounded p-2 text-white outline-none"
+                  />
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                   <div>
-                    <label className="block text-slate-400 uppercase text-[10px] font-bold mb-1">Location Details:</label>
+                    <label className="block text-slate-400 text-[10px] uppercase font-bold mb-1">Physical Location</label>
                     <input
                       type="text"
                       value={businessForm.location}
                       onChange={(e) => setBusinessForm({ ...businessForm, location: e.target.value })}
-                      className="w-full bg-[#080b14] border border-[#273153] rounded px-3 py-2 text-white"
-                      required
+                      className="w-full bg-[#080b14] border border-[#273153] rounded p-2 text-white outline-none"
                     />
                   </div>
                   <div>
-                    <label className="block text-slate-400 uppercase text-[10px] font-bold mb-1">Shop Door Code:</label>
+                    <label className="block text-slate-400 text-[10px] uppercase font-bold mb-1">Shop Door Code</label>
                     <input
                       type="text"
                       value={businessForm.shopDoor}
                       onChange={(e) => setBusinessForm({ ...businessForm, shopDoor: e.target.value })}
-                      className="w-full bg-[#080b14] border border-[#273153] rounded px-3 py-2 text-white font-bold"
-                      required
+                      className="w-full bg-[#080b14] border border-[#273153] rounded p-2 text-white outline-none"
                     />
                   </div>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                   <div>
-                    <label className="block text-slate-400 uppercase text-[10px] font-bold mb-1">Primary Hotline:</label>
+                    <label className="block text-slate-400 text-[10px] uppercase font-bold mb-1">Primary Hotline</label>
                     <input
                       type="text"
-                      value={businessForm.phones[0]}
+                      value={businessForm.phones[0] || ''}
                       onChange={(e) => {
                         const newPhones = [...businessForm.phones];
                         newPhones[0] = e.target.value;
                         setBusinessForm({ ...businessForm, phones: newPhones });
                       }}
-                      className="w-full bg-[#080b14] border border-[#273153] rounded px-3 py-2 text-white font-bold"
-                      required
+                      className="w-full bg-[#080b14] border border-[#273153] rounded p-2 text-white font-bold outline-none"
                     />
                   </div>
                   <div>
-                    <label className="block text-slate-400 uppercase text-[10px] font-bold mb-1">Secondary Hotline:</label>
+                    <label className="block text-slate-400 text-[10px] uppercase font-bold mb-1">Secondary Hotline</label>
                     <input
                       type="text"
                       value={businessForm.phones[1] || ''}
@@ -2428,18 +2367,18 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                         newPhones[1] = e.target.value;
                         setBusinessForm({ ...businessForm, phones: newPhones });
                       }}
-                      className="w-full bg-[#080b14] border border-[#273153] rounded px-3 py-2 text-white"
+                      className="w-full bg-[#080b14] border border-[#273153] rounded p-2 text-white font-bold outline-none"
                     />
                   </div>
                 </div>
 
-                <div className="flex justify-end pt-3">
+                <div className="flex justify-end pt-2">
                   <button
                     type="submit"
-                    className="px-6 py-2.5 bg-[#d4ff32] hover:bg-[#c1ec25] text-[#080b14] font-extrabold uppercase rounded-lg transition-colors cursor-pointer flex items-center gap-1.5"
+                    disabled={isSavingToFirestore}
+                    className="px-6 py-2.5 bg-[#d4ff32] hover:bg-[#c1ec25] text-[#080b14] font-extrabold uppercase rounded-lg transition-colors cursor-pointer"
                   >
-                    <Check className="w-4 h-4" />
-                    <span>Save Business Info</span>
+                    {isSavingToFirestore ? 'Saving to Firestore...' : 'Save Business Info to Firestore'}
                   </button>
                 </div>
               </form>
@@ -2447,64 +2386,85 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
           )}
 
           {/* ==================================================== */}
-          {/* TAB 10: WHATSAPP SETTINGS */}
+          {/* TAB 10: WHATSAPP ORDERING CONFIGURATION */}
           {/* ==================================================== */}
           {activeTab === 'whatsapp' && (
-            <div className="space-y-6 max-w-3xl font-mono text-xs">
+            <div className="space-y-6 font-mono text-xs max-w-2xl">
               <form
-                onSubmit={(e) => {
+                onSubmit={async (e) => {
                   e.preventDefault();
-                  dataService.saveWhatsAppSettings(whatsappForm);
-                  onDataChanged();
-                  showFeedback('WhatsApp ordering settings updated!');
+                  setIsSavingToFirestore(true);
+                  try {
+                    await dataService.saveWhatsAppSettings(whatsappForm);
+                    showFeedback('WhatsApp settings saved to Cloud Firestore!');
+                  } catch (err: any) {
+                    showFeedback(err.message || 'Failed to save WhatsApp settings', true);
+                  } finally {
+                    setIsSavingToFirestore(false);
+                  }
                 }}
-                className="p-5 sm:p-6 bg-[#13192f] rounded-2xl border border-[#273153] space-y-4"
+                className="p-5 bg-[#13192f] rounded-2xl border border-[#273153] space-y-4"
               >
                 <h3 className="text-sm font-bold text-white uppercase flex items-center gap-2">
                   <MessageSquare className="w-4 h-4 text-[#d4ff32]" />
-                  <span>Direct WhatsApp Ordering Channel</span>
+                  <span>WhatsApp Direct Ordering Engine</span>
                 </h3>
 
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <p className="text-slate-400 text-xs">
+                  All "Place Order" buttons immediately launch WhatsApp with a pre-filled message. No customer forms or private customer databases are stored on the site.
+                </p>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                   <div>
-                    <label className="block text-slate-400 uppercase text-[10px] font-bold mb-1">Store Phone:</label>
+                    <label className="block text-slate-400 text-[10px] uppercase font-bold mb-1">Local Hotline Number</label>
                     <input
                       type="text"
                       value={whatsappForm.phoneNumber}
                       onChange={(e) => setWhatsappForm({ ...whatsappForm, phoneNumber: e.target.value })}
-                      className="w-full bg-[#080b14] border border-[#273153] rounded px-3 py-2 text-white"
+                      className="w-full bg-[#080b14] border border-[#273153] rounded p-2 text-white font-bold outline-none"
                     />
                   </div>
                   <div>
-                    <label className="block text-slate-400 uppercase text-[10px] font-bold mb-1">International Format:</label>
+                    <label className="block text-slate-400 text-[10px] uppercase font-bold mb-1">International Format</label>
                     <input
                       type="text"
                       value={whatsappForm.internationalNumber}
                       onChange={(e) => setWhatsappForm({ ...whatsappForm, internationalNumber: e.target.value })}
-                      className="w-full bg-[#080b14] border border-[#273153] rounded px-3 py-2 text-white font-bold text-[#d4ff32]"
+                      className="w-full bg-[#080b14] border border-[#273153] rounded p-2 text-[#d4ff32] font-bold outline-none"
                     />
                   </div>
                 </div>
 
                 <div>
-                  <label className="block text-slate-400 uppercase text-[10px] font-bold mb-1">
-                    Product Order Message Template (Use {'{productName}'}):
-                  </label>
+                  <label className="block text-slate-400 text-[10px] uppercase font-bold mb-1">Product Order Template</label>
                   <input
                     type="text"
                     value={whatsappForm.messageTemplate}
                     onChange={(e) => setWhatsappForm({ ...whatsappForm, messageTemplate: e.target.value })}
-                    className="w-full bg-[#080b14] border border-[#273153] rounded px-3 py-2 text-white"
+                    className="w-full bg-[#080b14] border border-[#273153] rounded p-2 text-white outline-none"
+                  />
+                  <span className="text-[10px] text-slate-500 mt-1 block">
+                    Use <code className="text-[#d4ff32]">{"{productName}"}</code> for dynamic insertion.
+                  </span>
+                </div>
+
+                <div>
+                  <label className="block text-slate-400 text-[10px] uppercase font-bold mb-1">General Enquiry Message</label>
+                  <input
+                    type="text"
+                    value={whatsappForm.defaultMessage}
+                    onChange={(e) => setWhatsappForm({ ...whatsappForm, defaultMessage: e.target.value })}
+                    className="w-full bg-[#080b14] border border-[#273153] rounded p-2 text-white outline-none"
                   />
                 </div>
 
-                <div className="flex justify-end pt-3">
+                <div className="flex justify-end pt-2">
                   <button
                     type="submit"
-                    className="px-6 py-2.5 bg-[#d4ff32] hover:bg-[#c1ec25] text-[#080b14] font-extrabold uppercase rounded-lg transition-colors cursor-pointer flex items-center gap-1.5"
+                    disabled={isSavingToFirestore}
+                    className="px-6 py-2.5 bg-[#d4ff32] hover:bg-[#c1ec25] text-[#080b14] font-extrabold uppercase rounded-lg transition-colors cursor-pointer"
                   >
-                    <Check className="w-4 h-4" />
-                    <span>Save WhatsApp Config</span>
+                    {isSavingToFirestore ? 'Saving to Firestore...' : 'Save WhatsApp Engine to Firestore'}
                   </button>
                 </div>
               </form>
@@ -2513,60 +2473,6 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
         </div>
       </div>
-
-      {/* Global Media Preview Modal (for high-res photos or video playback) */}
-      {previewMediaModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/90 backdrop-blur-md">
-          <div className="relative w-full max-w-3xl bg-[#0d1222] border border-[#273153] rounded-2xl overflow-hidden p-4 space-y-4">
-            <div className="flex items-center justify-between border-b border-[#273153] pb-3">
-              <div>
-                <span className="text-[#d4ff32] text-[10px] font-mono font-bold uppercase">
-                  {previewMediaModal.mediaType === 'video' ? `Video Clip (${Math.round(previewMediaModal.duration || 0)}s)` : 'High-Res Photo'}
-                </span>
-                <h4 className="text-white font-bold font-mono text-sm">{previewMediaModal.originalFilename}</h4>
-              </div>
-              <button
-                onClick={() => setPreviewMediaModal(null)}
-                className="p-1.5 text-slate-400 hover:text-white bg-[#13192f] rounded border border-[#273153]"
-              >
-                <X className="w-5 h-5" />
-              </button>
-            </div>
-
-            <div className="relative aspect-[16/9] bg-black rounded-xl overflow-hidden flex items-center justify-center">
-              {previewMediaModal.mediaType === 'video' ? (
-                <video
-                  src={previewMediaModal.url}
-                  controls
-                  autoPlay
-                  playsInline
-                  className="w-full h-full object-contain"
-                />
-              ) : (
-                <img
-                  src={previewMediaModal.url}
-                  alt={previewMediaModal.originalFilename}
-                  className="w-full h-full object-contain"
-                />
-              )}
-            </div>
-
-            <div className="flex items-center justify-between text-xs font-mono text-slate-400">
-              <span className="truncate max-w-md">{previewMediaModal.url}</span>
-              <button
-                onClick={() => {
-                  navigator.clipboard.writeText(previewMediaModal.url);
-                  showFeedback('Cloudinary URL copied!');
-                }}
-                className="px-3 py-1.5 bg-[#d4ff32] text-[#080b14] font-bold rounded flex items-center gap-1.5"
-              >
-                <Copy className="w-3.5 h-3.5" />
-                <span>Copy URL</span>
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
     </div>
   );
 };
