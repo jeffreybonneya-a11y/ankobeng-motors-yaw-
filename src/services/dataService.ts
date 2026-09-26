@@ -12,7 +12,6 @@ import {
   writeBatch
 } from 'firebase/firestore';
 import { 
-  signInWithEmailAndPassword, 
   signInWithPopup, 
   signOut, 
   onAuthStateChanged,
@@ -377,6 +376,29 @@ export const cleanProductNameFromFileName = (fileName: string): string => {
   return fileName.substring(0, lastDotIndex);
 };
 
+/**
+ * Helper to recursively strip any undefined values from Firestore payloads.
+ * Cloud Firestore throws errors if an object contains `undefined` values.
+ */
+function sanitizeForFirestore<T>(data: T): T {
+  if (data === null || data === undefined) {
+    return data;
+  }
+  if (Array.isArray(data)) {
+    return data.map(item => sanitizeForFirestore(item)) as unknown as T;
+  }
+  if (typeof data === 'object' && !(data instanceof Date)) {
+    const cleaned: Record<string, any> = {};
+    for (const [key, value] of Object.entries(data)) {
+      if (value !== undefined) {
+        cleaned[key] = sanitizeForFirestore(value);
+      }
+    }
+    return cleaned as T;
+  }
+  return data;
+}
+
 export const dataService = {
   // --------------------------------------------------------------------------
   // Direct WhatsApp Order URL
@@ -405,11 +427,6 @@ export const dataService = {
     return auth.currentUser;
   },
 
-  async loginWithEmailPassword(email: string, pass: string): Promise<User> {
-    const userCredential = await signInWithEmailAndPassword(auth, email.trim(), pass);
-    return userCredential.user;
-  },
-
   async loginWithGoogle(): Promise<User> {
     const result = await signInWithPopup(auth, googleProvider);
     return result.user;
@@ -420,17 +437,9 @@ export const dataService = {
   },
 
   async isUserAdmin(user: User | null): Promise<boolean> {
-    if (!user) return false;
-    const adminEmails = ['10362581@upsamail.edu.gh'];
-    if (user.email && adminEmails.includes(user.email.toLowerCase().trim())) {
-      return true;
-    }
-    try {
-      const adminDoc = await getDoc(doc(db, 'admins', user.uid));
-      return adminDoc.exists() && adminDoc.data()?.role === 'admin';
-    } catch {
-      return false;
-    }
+    if (!user || !user.email) return false;
+    const AUTHORIZED_ADMIN_EMAIL = '10362581@upsamail.edu.gh';
+    return user.email.toLowerCase().trim() === AUTHORIZED_ADMIN_EMAIL.toLowerCase().trim();
   },
 
   // --------------------------------------------------------------------------
@@ -550,12 +559,12 @@ export const dataService = {
     try {
       const id = product.id || `prod-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`;
       const docRef = doc(db, 'products', id);
-      const dataToSave = {
+      const dataToSave = sanitizeForFirestore({
         ...product,
         id,
         updatedAt: new Date().toISOString(),
         createdAt: product.createdAt || new Date().toISOString()
-      };
+      });
       await setDoc(docRef, dataToSave);
       return id;
     } catch (error) {
@@ -577,11 +586,11 @@ export const dataService = {
   async saveCategory(category: Category): Promise<void> {
     const path = `categories/${category.id}`;
     try {
-      await setDoc(doc(db, 'categories', category.id), {
+      await setDoc(doc(db, 'categories', category.id), sanitizeForFirestore({
         ...category,
         updatedAt: new Date().toISOString(),
         createdAt: category.createdAt || new Date().toISOString()
-      });
+      }));
     } catch (error) {
       handleFirestoreError(error, OperationType.WRITE, path);
       throw error;
@@ -601,11 +610,11 @@ export const dataService = {
   async saveHeroSlide(slide: HeroSlide): Promise<void> {
     const path = `heroSlides/${slide.id}`;
     try {
-      await setDoc(doc(db, 'heroSlides', slide.id), {
+      await setDoc(doc(db, 'heroSlides', slide.id), sanitizeForFirestore({
         ...slide,
         updatedAt: new Date().toISOString(),
         createdAt: slide.createdAt || new Date().toISOString()
-      });
+      }));
     } catch (error) {
       handleFirestoreError(error, OperationType.WRITE, path);
       throw error;
@@ -625,10 +634,10 @@ export const dataService = {
   async saveHomepageContent(content: HomepageContent): Promise<void> {
     const path = 'homepageContent/main';
     try {
-      await setDoc(doc(db, 'homepageContent', 'main'), {
+      await setDoc(doc(db, 'homepageContent', 'main'), sanitizeForFirestore({
         ...content,
         updatedAt: new Date().toISOString()
-      });
+      }));
     } catch (error) {
       handleFirestoreError(error, OperationType.WRITE, path);
       throw error;
@@ -638,10 +647,10 @@ export const dataService = {
   async saveBusinessInfo(info: BusinessInfo): Promise<void> {
     const path = 'businessInfo/main';
     try {
-      await setDoc(doc(db, 'businessInfo', 'main'), {
+      await setDoc(doc(db, 'businessInfo', 'main'), sanitizeForFirestore({
         ...info,
         updatedAt: new Date().toISOString()
-      });
+      }));
     } catch (error) {
       handleFirestoreError(error, OperationType.WRITE, path);
       throw error;
@@ -651,10 +660,10 @@ export const dataService = {
   async saveWhatsAppSettings(settings: WhatsAppSettings): Promise<void> {
     const path = 'settings/whatsapp';
     try {
-      await setDoc(doc(db, 'settings', 'whatsapp'), {
+      await setDoc(doc(db, 'settings', 'whatsapp'), sanitizeForFirestore({
         ...settings,
         updatedAt: new Date().toISOString()
-      });
+      }));
     } catch (error) {
       handleFirestoreError(error, OperationType.WRITE, path);
       throw error;
@@ -665,11 +674,11 @@ export const dataService = {
     const id = `med-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`;
     const path = `media/${id}`;
     try {
-      await setDoc(doc(db, 'media', id), {
+      await setDoc(doc(db, 'media', id), sanitizeForFirestore({
         ...item,
         id,
         createdAt: new Date().toISOString()
-      });
+      }));
       return id;
     } catch (error) {
       handleFirestoreError(error, OperationType.WRITE, path);
@@ -690,54 +699,54 @@ export const dataService = {
   // --------------------------------------------------------------------------
   // Seed / Migration Utility (Imports Default Inventory into Firestore once)
   // --------------------------------------------------------------------------
-  async seedInitialDataIfEmpty(): Promise<boolean> {
+  async seedInitialDataIfEmpty(force = false): Promise<boolean> {
     try {
       const prodSnap = await getDocs(collection(db, 'products'));
-      if (!prodSnap.empty) {
+      if (!force && !prodSnap.empty) {
         return false; // Already populated
       }
 
-      console.log('Seeding initial Ankobeng Motors catalog into Cloud Firestore...');
+      console.log('Synchronizing Ankobeng Motors catalog into Cloud Firestore...');
       const batch = writeBatch(db);
 
       // 1. Products
       INITIAL_PRODUCTS.forEach((p) => {
         const ref = doc(db, 'products', p.id);
-        batch.set(ref, p);
+        batch.set(ref, sanitizeForFirestore(p), { merge: true });
       });
 
       // 2. Categories
       INITIAL_CATEGORIES.forEach((c) => {
         const ref = doc(db, 'categories', c.id);
-        batch.set(ref, c);
+        batch.set(ref, sanitizeForFirestore(c), { merge: true });
       });
 
       // 3. Hero Slides
       INITIAL_HERO_SLIDES.forEach((s) => {
         const ref = doc(db, 'heroSlides', s.id);
-        batch.set(ref, s);
+        batch.set(ref, sanitizeForFirestore(s), { merge: true });
       });
 
       // 4. Homepage Content
       const hpRef = doc(db, 'homepageContent', 'main');
-      batch.set(hpRef, INITIAL_HOMEPAGE_CONTENT);
+      batch.set(hpRef, sanitizeForFirestore(INITIAL_HOMEPAGE_CONTENT), { merge: true });
 
       // 5. Business Info
       const bizRef = doc(db, 'businessInfo', 'main');
-      batch.set(bizRef, INITIAL_BUSINESS_INFO);
+      batch.set(bizRef, sanitizeForFirestore(INITIAL_BUSINESS_INFO), { merge: true });
 
       // 6. WhatsApp Settings
       const waRef = doc(db, 'settings', 'whatsapp');
-      batch.set(waRef, INITIAL_WHATSAPP_SETTINGS);
+      batch.set(waRef, sanitizeForFirestore(INITIAL_WHATSAPP_SETTINGS), { merge: true });
 
       // 7. Initial Media Items
       INITIAL_MEDIA_ITEMS.forEach((m) => {
         const ref = doc(db, 'media', m.id);
-        batch.set(ref, m);
+        batch.set(ref, sanitizeForFirestore(m), { merge: true });
       });
 
       await batch.commit();
-      console.log('Initial catalog seeded successfully.');
+      console.log('Catalog synchronized successfully.');
       return true;
     } catch (err) {
       console.warn('Initial seeding check:', err);
