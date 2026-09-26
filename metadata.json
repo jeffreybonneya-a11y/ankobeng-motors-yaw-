@@ -1,0 +1,6 @@
+{
+  "name": "Ankobeng Motors",
+  "description": "Dealers in Opel engines and all kinds of engine parts in Abossey Okai, Accra. Direct stockists with in-shop verification and ordering.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
