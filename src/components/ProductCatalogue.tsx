@@ -2,6 +2,7 @@ import React, { useState, useMemo } from 'react';
 import { Layers, Search, ShoppingBag, Eye, X, Film } from 'lucide-react';
 import { Product, Category, VideoSettings } from '../types';
 import { MediaVideoPlayer } from './MediaVideoPlayer';
+import { OptimizedImage } from './OptimizedImage';
 
 interface ProductCatalogueProps {
   products: Product[];
@@ -208,24 +209,30 @@ export const ProductCatalogue: React.FC<ProductCatalogueProps> = ({
         {/* Product Grid */}
         {filteredProducts.length > 0 ? (
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 pt-4">
-            {filteredProducts.map((product) => (
+            {filteredProducts.map((product, idx) => (
               <div
                 key={product.id}
                 className="bg-[#13192f] hover:bg-[#18203d] rounded-xl border border-[#273153] hover:border-[#d4ff32]/40 overflow-hidden flex flex-col justify-between transition-all duration-300 group shadow-md"
                 data-purpose="product-card"
               >
                 <div className="p-4 space-y-3">
-                  {/* Image container */}
+                  {/* Image container with stable aspect ratio */}
                   <div 
                     onClick={() => onOpenDetails(product)}
                     className="relative aspect-[4/3] rounded-lg overflow-hidden bg-black/40 border border-[#273153] cursor-pointer"
                   >
-                    <img
-                      src={product.images[0]}
-                      alt={product.name}
-                      className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500"
-                      loading="lazy"
-                    />
+                    {product.images && product.images[0] ? (
+                      <OptimizedImage
+                        src={product.images[0]}
+                        alt={product.name}
+                        priority={idx < 3}
+                        className="w-full h-full rounded-lg group-hover:scale-105 transition-transform duration-500"
+                      />
+                    ) : (
+                      <div className="w-full h-full flex items-center justify-center text-slate-500 text-xs font-mono">
+                        No Image Available
+                      </div>
+                    )}
                     <span className="absolute top-2 left-2 bg-[#d4ff32] text-[#080b14] text-[10px] font-mono px-2 py-0.5 rounded font-extrabold uppercase">
                       {product.availability || 'IN STOCK • SHOP E-3'}
                     </span>
@@ -275,6 +282,17 @@ export const ProductCatalogue: React.FC<ProductCatalogueProps> = ({
                     <span>DETAILS</span>
                   </button>
                 </div>
+              </div>
+            ))}
+          </div>
+        ) : products.length === 0 ? (
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 pt-4">
+            {[1, 2, 3, 4, 5, 6].map((i) => (
+              <div key={i} className="bg-[#13192f] rounded-xl border border-[#273153] overflow-hidden p-4 space-y-3">
+                <div className="aspect-[4/3] rounded-lg bg-[#080b14] border border-[#273153]" />
+                <div className="h-4 w-20 bg-[#080b14] rounded" />
+                <div className="h-6 w-3/4 bg-[#080b14] rounded" />
+                <div className="h-4 w-full bg-[#080b14] rounded" />
               </div>
             ))}
           </div>

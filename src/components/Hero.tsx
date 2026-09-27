@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { MapPin, Phone, ChevronLeft, ChevronRight, ShoppingBag, ArrowRight, Play } from 'lucide-react';
 import { HeroSlide, BusinessInfo, HomepageContent } from '../types';
-import { STOREFRONT_IMAGE } from '../services/dataService';
+import { OptimizedImage } from './OptimizedImage';
 
 interface HeroProps {
   slides: HeroSlide[];
@@ -56,12 +56,23 @@ export const Hero: React.FC<HeroProps> = ({
     touchStartX.current = null;
   };
 
+  // Preload next slide image so transitions are instant without flashing
+  useEffect(() => {
+    if (activeSlides.length <= 1) return;
+    const nextIdx = (currentSlideIndex + 1) % activeSlides.length;
+    const nextSlideItem = activeSlides[nextIdx];
+    if (nextSlideItem && nextSlideItem.image && !nextSlideItem.videoUrl && nextSlideItem.mediaType !== 'video') {
+      const img = new Image();
+      img.src = nextSlideItem.image;
+    }
+  }, [currentSlideIndex, activeSlides]);
+
   const currentSlide = activeSlides[currentSlideIndex] || activeSlides[0];
 
   // Background Media Configuration (Image or Video)
   const isBackgroundVideo = homepageContent?.homepageBackgroundType === 'video' && !!homepageContent?.homepageBackgroundVideo;
   const bgVideoUrl = homepageContent?.homepageBackgroundVideo;
-  const bgImageUrl = homepageContent?.homepageBackgroundImage || STOREFRONT_IMAGE;
+  const bgImageUrl = homepageContent?.homepageBackgroundImage;
   const bgVideoSettings = homepageContent?.homepageBackgroundVideoSettings || {
     autoplay: true,
     muted: true,
@@ -84,13 +95,15 @@ export const Hero: React.FC<HeroProps> = ({
             preload="metadata"
             className="w-full h-full object-cover object-center"
           />
-        ) : (
-          <img
+        ) : bgImageUrl ? (
+          <OptimizedImage
             src={bgImageUrl}
             alt="Ankobeng Motors Storefront - Near the Post Office, Abossey Okai, Accra"
             className="w-full h-full object-cover object-center"
-            loading="eager"
+            priority={true}
           />
+        ) : (
+          <div className="w-full h-full bg-[#080b14]" />
         )}
         {/* Subtle neutral overlay to guarantee crisp text readability while keeping the storefront or media clearly visible */}
         <div className="absolute inset-0 bg-gradient-to-r from-[#080b14]/85 via-[#080b14]/65 to-[#080b14]/45"></div>
@@ -185,10 +198,11 @@ export const Hero: React.FC<HeroProps> = ({
                       className="object-cover w-full h-full rounded-xl"
                     />
                   ) : (
-                    <img
+                    <OptimizedImage
                       src={currentSlide.image}
                       alt={currentSlide.title}
-                      className="object-cover w-full h-full rounded-xl transition-all duration-700 ease-out"
+                      priority={true}
+                      className="w-full h-full rounded-xl transition-all duration-700 ease-out"
                     />
                   )
                 )}

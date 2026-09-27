@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { X, ShoppingBag, PhoneCall, Check, MapPin, Play, Image as ImageIcon } from 'lucide-react';
 import { Product, BusinessInfo } from '../types';
+import { OptimizedImage } from './OptimizedImage';
 
 interface ProductDetailModalProps {
   product: Product | null;
@@ -63,12 +64,17 @@ export const ProductDetailModal: React.FC<ProductDetailModalProps> = ({
                   preload="metadata"
                   className="w-full h-full object-cover"
                 />
-              ) : (
-                <img
+              ) : activeImage ? (
+                <OptimizedImage
                   src={activeImage}
                   alt={product.name}
-                  className="w-full h-full object-cover"
+                  priority={true}
+                  className="w-full h-full"
                 />
+              ) : (
+                <div className="w-full h-full flex items-center justify-center text-slate-500 font-mono text-xs">
+                  No Image Available
+                </div>
               )}
               <span className="absolute top-3 left-3 bg-[#d4ff32] text-[#080b14] font-mono text-[10px] font-extrabold px-2.5 py-1 rounded uppercase">
                 {product.availability}

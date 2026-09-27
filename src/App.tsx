@@ -11,13 +11,10 @@ import {
 import { 
   dataService, 
   openWhatsAppOrder,
-  INITIAL_PRODUCTS,
   INITIAL_CATEGORIES,
-  INITIAL_HERO_SLIDES,
   INITIAL_BUSINESS_INFO,
   INITIAL_HOMEPAGE_CONTENT,
-  INITIAL_WHATSAPP_SETTINGS,
-  INITIAL_MEDIA_ITEMS
+  INITIAL_WHATSAPP_SETTINGS
 } from './services/dataService';
 import { Header } from './components/Header';
 import { Hero } from './components/Hero';
@@ -30,6 +27,7 @@ import { CallToActionStrip } from './components/CallToActionStrip';
 import { ContactView } from './components/ContactView';
 import { AdminDashboard } from './components/AdminDashboard';
 import { Footer } from './components/Footer';
+import { preloadAndDecodeImage } from './components/OptimizedImage';
 
 const getInitialView = (): string => {
   if (typeof window === 'undefined') return 'home';
@@ -54,14 +52,14 @@ const getInitialView = (): string => {
 };
 
 export default function App() {
-  // Application Data State (Initialized with fallback defaults, updated dynamically via Firestore)
-  const [products, setProducts] = useState<Product[]>(INITIAL_PRODUCTS);
+  // Application Data State - Dynamic Firestore as sole authoritative source
+  const [products, setProducts] = useState<Product[]>([]);
   const [categories, setCategories] = useState<Category[]>(INITIAL_CATEGORIES);
-  const [heroSlides, setHeroSlides] = useState<HeroSlide[]>(INITIAL_HERO_SLIDES);
+  const [heroSlides, setHeroSlides] = useState<HeroSlide[]>([]);
   const [businessInfo, setBusinessInfo] = useState<BusinessInfo>(INITIAL_BUSINESS_INFO);
   const [homepageContent, setHomepageContent] = useState<HomepageContent>(INITIAL_HOMEPAGE_CONTENT);
   const [whatsappSettings, setWhatsappSettings] = useState<WhatsAppSettings>(INITIAL_WHATSAPP_SETTINGS);
-  const [mediaItems, setMediaItems] = useState<MediaItem[]>(INITIAL_MEDIA_ITEMS);
+  const [mediaItems, setMediaItems] = useState<MediaItem[]>([]);
 
   // Navigation & View States
   const [currentView, setCurrentView] = useState<string>(getInitialView);
@@ -73,14 +71,13 @@ export default function App() {
 
   // Set up realtime Firestore subscriptions on mount
   useEffect(() => {
-    // Attempt one-time seed if Firestore collections are empty
-    dataService.seedInitialDataIfEmpty().catch(console.warn);
-
-    // 1. Products subscription
+    // 1. Products subscription (Cloud Firestore single source of truth)
     const unsubProducts = dataService.subscribeToProducts((list) => {
-      if (list && list.length > 0) {
-        setProducts(list);
+      const validList = list || [];
+      if (validList.length > 0 && validList[0].images?.[0]) {
+        preloadAndDecodeImage(validList[0].images[0]);
       }
+      setProducts(validList);
     });
 
     // 2. Categories subscription
@@ -93,6 +90,9 @@ export default function App() {
     // 3. Hero Slides subscription
     const unsubHeroSlides = dataService.subscribeToHeroSlides((slides) => {
       if (slides && slides.length > 0) {
+        if (slides[0].image) {
+          preloadAndDecodeImage(slides[0].image);
+        }
         setHeroSlides(slides);
       }
     });
@@ -100,6 +100,9 @@ export default function App() {
     // 4. Homepage Content subscription
     const unsubHomepage = dataService.subscribeToHomepageContent((hp) => {
       if (hp) {
+        if (hp.homepageBackgroundImage) {
+          preloadAndDecodeImage(hp.homepageBackgroundImage);
+        }
         setHomepageContent(hp);
       }
     });
@@ -120,9 +123,7 @@ export default function App() {
 
     // 7. Media Library subscription
     const unsubMedia = dataService.subscribeToMedia((items) => {
-      if (items && items.length > 0) {
-        setMediaItems(items);
-      }
+      setMediaItems(items || []);
     });
 
     return () => {
@@ -368,6 +369,7 @@ export default function App() {
             />
             <ContactView
               businessInfo={businessInfo}
+              homepageContent={homepageContent}
               onOpenOrder={() => handleOpenOrder()}
             />
             <CallToActionStrip
@@ -398,6 +400,7 @@ export default function App() {
           <div className="py-8 space-y-12">
             <ContactView
               businessInfo={businessInfo}
+              homepageContent={homepageContent}
               onOpenOrder={() => handleOpenOrder()}
             />
             <CallToActionStrip

@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { VideoSettings } from '../types';
 import { Play } from 'lucide-react';
+import { OptimizedImage } from './OptimizedImage';
 
 interface MediaVideoPlayerProps {
   video?: VideoSettings;
@@ -19,11 +20,11 @@ export const MediaVideoPlayer: React.FC<MediaVideoPlayerProps> = ({
   if (!video || !video.enabled || !videoSrc || hasError) {
     if (fallbackImage) {
       return (
-        <img
+        <OptimizedImage
           src={fallbackImage}
           alt={video?.title || 'Media visual'}
-          className={`object-cover ${className}`}
-          loading="lazy"
+          className={className}
+          priority={true}
         />
       );
     }

@@ -130,7 +130,7 @@ export const INITIAL_HOMEPAGE_CONTENT: HomepageContent = {
   aboutDescription: 'Every engine on our racks is physically stocked at our Abossey Okai store. Mechanics, fleet operators, and vehicle owners are welcome to inspect units directly before ordering.',
   ctaHeadline: 'LOOKING FOR A SPECIFIC ENGINE?',
   ctaDescription: 'Tell us what you need and contact Ankobeng Motors for the engine or engine part you are looking for. Direct stock availability at Abossey Okai.',
-  homepageBackgroundImage: STOREFRONT_IMAGE,
+  homepageBackgroundImage: '',
   homepageBackgroundType: 'image',
   homepageBackgroundVideo: '',
   homepageBackgroundVideoSettings: {

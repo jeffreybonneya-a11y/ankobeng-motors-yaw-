@@ -2,6 +2,7 @@ import React from 'react';
 import { MapPin, Wrench, ShieldCheck, Mail, Phone, Building } from 'lucide-react';
 import { BusinessInfo, HomepageContent } from '../types';
 import { STOREFRONT_IMAGE_INTERIOR } from '../services/dataService';
+import { OptimizedImage } from './OptimizedImage';
 
 interface AboutSectionProps {
   businessInfo: BusinessInfo;
@@ -41,11 +42,11 @@ export const AboutSection: React.FC<AboutSectionProps> = ({
                   className="w-full h-full object-cover"
                 />
               ) : (
-                <img
+                <OptimizedImage
                   src={mediaUrl}
                   alt="Actual Shop Location Shop Door E-3 Abossey Okai"
-                  className="w-full h-full object-cover group-hover:scale-102 transition-transform duration-500"
-                  loading="lazy"
+                  priority={false}
+                  className="w-full h-full group-hover:scale-102 transition-transform duration-500"
                 />
               )}
             </div>

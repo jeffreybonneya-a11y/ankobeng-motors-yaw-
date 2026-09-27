@@ -1,7 +1,8 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { ShieldCheck, ChevronLeft, ChevronRight, FileText, ShoppingBag, PackageOpen } from 'lucide-react';
 import { Product, VideoSettings } from '../types';
 import { MediaVideoPlayer } from './MediaVideoPlayer';
+import { OptimizedImage } from './OptimizedImage';
 
 interface FeaturedSpotlightProps {
   products: Product[];
@@ -28,27 +29,69 @@ export const FeaturedSpotlight: React.FC<FeaturedSpotlightProps> = ({
   const safeIndex = products.length > 0 ? currentIndex % products.length : 0;
   const currentItem = products.length > 0 ? products[safeIndex] : null;
 
+  // Preload next and previous product images so manual/automatic transitions are instantaneous and never flash
+  useEffect(() => {
+    if (products.length <= 1) return;
+    const nextIdx = (safeIndex + 1) % products.length;
+    const prevIdx = (safeIndex - 1 + products.length) % products.length;
+    [nextIdx, prevIdx].forEach((idx) => {
+      const p = products[idx];
+      if (p && p.images && p.images[0]) {
+        const img = new Image();
+        img.src = p.images[0];
+      }
+    });
+  }, [safeIndex, products]);
+
+  // Transition handler that preloads the target image before switching the view
+  const switchProductTo = useCallback((targetIndex: number) => {
+    if (products.length <= 1) return;
+    const targetProduct = products[targetIndex];
+    const targetImageUrl = targetProduct?.images?.[0];
+
+    if (!targetImageUrl) {
+      setCurrentIndex(targetIndex);
+      return;
+    }
+
+    const img = new Image();
+    img.src = targetImageUrl;
+    if (img.decode) {
+      img.decode().then(() => {
+        setCurrentIndex(targetIndex);
+      }).catch(() => {
+        setCurrentIndex(targetIndex);
+      });
+    } else {
+      img.onload = () => setCurrentIndex(targetIndex);
+      img.onerror = () => setCurrentIndex(targetIndex);
+    }
+  }, [products]);
+
   // Manual navigation handlers
   const handlePrev = useCallback(() => {
     if (products.length <= 1) return;
-    setCurrentIndex((prev) => (prev - 1 + products.length) % products.length);
-  }, [products.length]);
+    const newIdx = (safeIndex - 1 + products.length) % products.length;
+    switchProductTo(newIdx);
+  }, [products.length, safeIndex, switchProductTo]);
 
   const handleNext = useCallback(() => {
     if (products.length <= 1) return;
-    setCurrentIndex((prev) => (prev + 1) % products.length);
-  }, [products.length]);
+    const newIdx = (safeIndex + 1) % products.length;
+    switchProductTo(newIdx);
+  }, [products.length, safeIndex, switchProductTo]);
 
-  // 1-Hour automatic rotation timer that resets whenever currentIndex or products.length changes
+  // 1-Hour automatic rotation timer that resets whenever safeIndex or products.length changes
   useEffect(() => {
     if (products.length <= 1) return;
 
     const timer = setInterval(() => {
-      setCurrentIndex((prev) => (prev + 1) % products.length);
+      const nextIdx = (safeIndex + 1) % products.length;
+      switchProductTo(nextIdx);
     }, ROTATION_INTERVAL_MS);
 
     return () => clearInterval(timer);
-  }, [products.length, currentIndex]);
+  }, [products.length, safeIndex, switchProductTo]);
 
   return (
     <section className="py-14 bg-gradient-to-b from-[#080b14] via-[#0d1222] to-[#080b14] border-b border-[#273153]" data-purpose="featured-engine-spotlight">
@@ -91,18 +134,17 @@ export const FeaturedSpotlight: React.FC<FeaturedSpotlightProps> = ({
           )}
         </div>
 
-        {/* Empty State */}
+        {/* Structural Card Shell for Initial Load */}
         {!currentItem ? (
-          <div className="bg-[#13192f] p-10 sm:p-14 rounded-2xl border border-[#273153] text-center space-y-3">
-            <div className="w-12 h-12 rounded-xl bg-[#080b14] border border-[#273153] flex items-center justify-center text-slate-400 mx-auto">
-              <PackageOpen className="w-6 h-6 text-slate-500" />
+          <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 bg-[#13192f] p-6 sm:p-8 rounded-2xl border border-[#273153] items-center shadow-lg">
+            <div className="lg:col-span-5 relative">
+              <div className="aspect-[4/3] rounded-xl overflow-hidden bg-[#080b14] border border-[#273153]" />
             </div>
-            <h3 className="text-lg font-bold text-white uppercase tracking-wide font-heading">
-              NO PRODUCTS AVAILABLE
-            </h3>
-            <p className="text-slate-400 text-xs max-w-md mx-auto">
-              Featured products will appear here when products are added.
-            </p>
+            <div className="lg:col-span-7 space-y-4">
+              <div className="h-4 w-32 bg-[#080b14] rounded border border-[#273153]" />
+              <div className="h-8 w-3/4 bg-[#080b14] rounded border border-[#273153]" />
+              <div className="h-4 w-1/2 bg-[#080b14] rounded border border-[#273153]" />
+            </div>
           </div>
         ) : (
           /* Featured Card Display */
@@ -118,10 +160,11 @@ export const FeaturedSpotlight: React.FC<FeaturedSpotlightProps> = ({
                   />
                 ) : (
                   currentItem.images && currentItem.images.length > 0 ? (
-                    <img
+                    <OptimizedImage
                       src={currentItem.images[0]}
                       alt={currentItem.name}
-                      className="w-full h-full object-cover rounded-lg group-hover:scale-105 transition-transform duration-500"
+                      priority={true}
+                      className="w-full h-full rounded-lg group-hover:scale-105 transition-transform duration-500"
                     />
                   ) : (
                     <div className="w-full h-full flex items-center justify-center text-slate-500 text-xs font-mono">
