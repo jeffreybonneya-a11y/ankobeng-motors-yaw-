@@ -7,7 +7,7 @@ import {
   Sliders, ArrowUp, ArrowDown, Copy, ExternalLink, Sparkles,
   Phone, Smartphone, Search, Film, Play, Video, Volume2, 
   VolumeX, RotateCcw, MonitorPlay, SlidersHorizontal, CheckSquare,
-  User as UserIcon, Database, Cloud
+  User as UserIcon, Database, Cloud, Eye, EyeOff, Lock
 } from 'lucide-react';
 import { User } from 'firebase/auth';
 import { 
@@ -59,12 +59,14 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   onDataChanged,
   isStandalonePage = false
 }) => {
-  // Firebase Authentication State
-  const [currentUser, setCurrentUser] = useState<User | null>(() => dataService.getCurrentUser());
-  const [isAdminAuthorized, setIsAdminAuthorized] = useState<boolean>(false);
+  // Server Session Authentication State
+  const [isAdminAuthenticated, setIsAdminAuthenticated] = useState<boolean>(false);
   const [authLoading, setAuthLoading] = useState<boolean>(true);
   const [authError, setAuthError] = useState('');
   const [isSubmittingAuth, setIsSubmittingAuth] = useState(false);
+  const [phoneInput, setPhoneInput] = useState('');
+  const [passwordInput, setPasswordInput] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
 
   // Tabs
   type TabKey = 
@@ -96,22 +98,29 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     }
   };
 
-  // Monitor Firebase Auth state
+  // Verify server session on mount
   useEffect(() => {
-    const unsub = dataService.onAuthChange(async (user) => {
-      setCurrentUser(user);
-      if (user) {
-        const isAdm = await dataService.isUserAdmin(user);
-        setIsAdminAuthorized(isAdm);
-        if (!isAdm) {
-          setAuthError(`User ${user.email || user.uid} is not authorized as an administrator.`);
-        }
-      } else {
-        setIsAdminAuthorized(false);
+    let isMounted = true;
+    async function verifySession() {
+      const res = await dataService.checkAdminSession();
+      if (isMounted) {
+        setIsAdminAuthenticated(res.authenticated);
+        setAuthLoading(false);
       }
-      setAuthLoading(false);
+    }
+    verifySession();
+
+    // Firebase auth observer keeps client sync in place
+    const unsub = dataService.onAuthChange((user) => {
+      if (user && isMounted) {
+        setIsAdminAuthenticated(true);
+      }
     });
-    return () => unsub();
+
+    return () => {
+      isMounted = false;
+      unsub();
+    };
   }, []);
 
   // ----------------------------------------------------
@@ -226,21 +235,26 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   }, [whatsappSettings]);
 
   // ----------------------------------------------------
-  // FIREBASE AUTHENTICATION HANDLERS (GOOGLE SIGN-IN ONLY)
+  // SERVER PHONE + PASSWORD AUTHENTICATION HANDLERS
   // ----------------------------------------------------
-  const handleGoogleLogin = async () => {
+  const handlePhoneLogin = async (e: React.FormEvent) => {
+    e.preventDefault();
     setAuthError('');
     setIsSubmittingAuth(true);
+
     try {
-      await dataService.loginWithGoogle();
-      showFeedback('Google sign-in successful.');
-    } catch (err: any) {
-      console.error('Google Sign-in error:', err);
-      if (err.code === 'auth/popup-closed-by-user') {
-        setAuthError('Sign-in cancelled. Please complete the Google login prompt.');
+      const res = await dataService.loginAdminWithPhone(phoneInput, passwordInput);
+      if (res.success) {
+        setIsAdminAuthenticated(true);
+        setPasswordInput('');
+        showFeedback('Administrator login successful.');
       } else {
-        setAuthError(err.message || 'Google sign-in encountered an error.');
+        setIsAdminAuthenticated(false);
+        setAuthError(res.message || 'Invalid phone number or password.');
       }
+    } catch (err: any) {
+      setIsAdminAuthenticated(false);
+      setAuthError('Invalid phone number or password.');
     } finally {
       setIsSubmittingAuth(false);
     }
@@ -249,7 +263,10 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const handleLogout = async () => {
     try {
       await dataService.logoutAdmin();
-      showFeedback('Signed out from Firebase Admin Portal.');
+      setIsAdminAuthenticated(false);
+      setPhoneInput('');
+      setPasswordInput('');
+      showFeedback('Signed out from Admin Portal.');
     } catch (err: any) {
       showFeedback(err.message || 'Error signing out', true);
     }
@@ -668,20 +685,20 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   };
 
   // ----------------------------------------------------
-  // 1. RENDER FIREBASE LOGIN SCREEN IF UNAUTHENTICATED
+  // 1. RENDER PHONE + PASSWORD LOGIN SCREEN IF UNAUTHENTICATED
   // ----------------------------------------------------
   if (authLoading) {
     return (
       <div className="min-h-screen bg-[#080b14] flex items-center justify-center p-4">
         <div className="flex items-center gap-3 text-[#d4ff32] font-mono text-xs animate-pulse">
           <RefreshCw className="w-5 h-5 animate-spin" />
-          <span>Verifying Firebase Authentication...</span>
+          <span>Verifying Portal Session...</span>
         </div>
       </div>
     );
   }
 
-  if (!currentUser) {
+  if (!isAdminAuthenticated) {
     return (
       <div className="min-h-screen bg-[#080b14] flex items-center justify-center p-4 selection:bg-[#d4ff32] selection:text-[#080b14]">
         <div className="w-full max-w-md bg-[#0d1222] border border-[#273153] rounded-2xl shadow-2xl p-6 sm:p-8 space-y-6">
@@ -689,11 +706,11 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
             <div className="w-14 h-14 rounded-2xl bg-[#13192f] border border-[#d4ff32]/40 mx-auto flex items-center justify-center text-[#d4ff32] shadow-inner">
               <Shield className="w-7 h-7" />
             </div>
-            <h2 className="text-2xl font-black uppercase text-white tracking-tight font-heading">
-              STORE MANAGEMENT PORTAL
-            </h2>
-            <p className="text-xs font-mono text-slate-400">
-              Official Administrator Access • Google Authentication
+            <h1 className="text-xl font-black uppercase text-white tracking-tight font-heading">
+              ANKOBENG MOTORS
+            </h1>
+            <p className="text-xs font-mono font-bold text-[#d4ff32] tracking-wider uppercase">
+              ADMIN CMS PORTAL
             </p>
           </div>
 
@@ -704,99 +721,67 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
             </div>
           )}
 
-          <div className="space-y-3 font-mono text-xs">
-            {/* Google Sign-in Only Button */}
-            <button
-              type="button"
-              onClick={handleGoogleLogin}
-              disabled={isSubmittingAuth}
-              className="w-full py-3.5 px-4 bg-white hover:bg-slate-100 text-slate-900 rounded-xl font-sans text-sm font-semibold transition-all flex items-center justify-center gap-3 cursor-pointer shadow-lg active:scale-[0.99] disabled:opacity-50"
-            >
-              <svg className="w-5 h-5 shrink-0" viewBox="0 0 24 24">
-                <path
-                  fill="#4285F4"
-                  d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"
+          <form onSubmit={handlePhoneLogin} className="space-y-4 font-mono text-xs">
+            <div className="space-y-1.5">
+              <label className="block text-slate-300 font-bold uppercase text-[11px]">
+                Phone Number
+              </label>
+              <div className="relative">
+                <Smartphone className="w-4 h-4 text-slate-400 absolute left-3.5 top-3.5" />
+                <input
+                  type="text"
+                  required
+                  value={phoneInput}
+                  onChange={(e) => setPhoneInput(e.target.value)}
+                  placeholder="Phone Number"
+                  className="w-full pl-10 pr-4 py-3 bg-[#13192f] border border-[#273153] focus:border-[#d4ff32] text-white rounded-xl focus:outline-none transition-colors"
                 />
-                <path
-                  fill="#34A853"
-                  d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"
-                />
-                <path
-                  fill="#FBBC05"
-                  d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.06H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.94l2.85-2.22.81-.63z"
-                />
-                <path
-                  fill="#EA4335"
-                  d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.06l3.66 2.84c.87-2.6 3.3-4.52 6.16-4.52z"
-                />
-              </svg>
-              <span>{isSubmittingAuth ? 'Signing in with Google...' : 'Sign in with Google'}</span>
-            </button>
-
-            <button
-              type="button"
-              onClick={onClose}
-              className="w-full py-2.5 bg-[#13192f] hover:bg-[#18203d] border border-[#273153] text-slate-300 rounded-xl font-bold transition-colors cursor-pointer text-center"
-            >
-              Return to Store
-            </button>
-          </div>
-
-          <div className="pt-4 border-t border-[#273153] text-center text-[10px] text-slate-400 font-mono">
-            Authorized Administrator Access Only • Shop Door E-3
-          </div>
-        </div>
-      </div>
-    );
-  }
-
-  // Unauthorized access guard: Authenticated user is not an administrator
-  if (!isAdminAuthorized) {
-    return (
-      <div className="min-h-screen bg-[#080b14] flex items-center justify-center p-4 selection:bg-[#d4ff32] selection:text-[#080b14]">
-        <div className="w-full max-w-md bg-[#0d1222] border border-red-500/40 rounded-2xl shadow-2xl p-6 sm:p-8 space-y-6">
-          <div className="text-center space-y-2">
-            <div className="w-14 h-14 rounded-2xl bg-red-950/50 border border-red-500/50 mx-auto flex items-center justify-center text-red-400 shadow-inner">
-              <AlertCircle className="w-7 h-7" />
+              </div>
             </div>
-            <h2 className="text-xl font-black uppercase text-white tracking-tight font-heading">
-              ACCESS RESTRICTED
-            </h2>
-            <p className="text-xs font-mono text-red-300">
-              Administrative Privileges Required
-            </p>
-          </div>
 
-          <div className="p-4 bg-[#13192f] border border-[#273153] rounded-xl text-xs font-mono space-y-2 text-slate-300">
-            <div className="flex items-center gap-2 text-slate-400">
-              <UserIcon className="w-4 h-4 text-slate-400" />
-              <span>Signed in with Google as:</span>
+            <div className="space-y-1.5">
+              <label className="block text-slate-300 font-bold uppercase text-[11px]">
+                Password
+              </label>
+              <div className="relative">
+                <Lock className="w-4 h-4 text-slate-400 absolute left-3.5 top-3.5" />
+                <input
+                  type={showPassword ? 'text' : 'password'}
+                  required
+                  value={passwordInput}
+                  onChange={(e) => setPasswordInput(e.target.value)}
+                  placeholder="Password"
+                  className="w-full pl-10 pr-10 py-3 bg-[#13192f] border border-[#273153] focus:border-[#d4ff32] text-white rounded-xl focus:outline-none transition-colors"
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowPassword(!showPassword)}
+                  className="absolute right-3.5 top-3.5 text-slate-400 hover:text-slate-200 cursor-pointer"
+                  title={showPassword ? 'Hide password' : 'Show password'}
+                >
+                  {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                </button>
+              </div>
             </div>
-            <div className="font-bold text-white break-all bg-[#080b14] p-2 rounded border border-[#273153]">
-              {currentUser.email || currentUser.uid}
-            </div>
-            <p className="text-[11px] text-slate-400 pt-1 leading-relaxed">
-              This Google account is not registered as an authorized administrator. All CMS modifications and Firestore operations are restricted by security rules.
-            </p>
-          </div>
 
-          <div className="flex flex-col gap-3 font-mono text-xs">
-            <button
-              type="button"
-              onClick={handleLogout}
-              className="w-full py-2.5 bg-red-950/60 hover:bg-red-900/60 border border-red-500/50 text-red-200 font-bold rounded-lg transition-colors cursor-pointer flex items-center justify-center gap-2"
-            >
-              <LogOut className="w-4 h-4" />
-              <span>Sign Out &amp; Switch Account</span>
-            </button>
-            <button
-              type="button"
-              onClick={onClose}
-              className="w-full py-2.5 bg-[#13192f] hover:bg-[#18203d] border border-[#273153] text-slate-300 font-bold rounded-lg transition-colors cursor-pointer"
-            >
-              Return to Storefront
-            </button>
-          </div>
+            <div className="pt-2 space-y-3">
+              <button
+                type="submit"
+                disabled={isSubmittingAuth}
+                className="w-full py-3.5 px-4 bg-[#d4ff32] hover:bg-[#c1ec25] text-[#080b14] rounded-xl font-bold uppercase tracking-wider text-xs transition-all flex items-center justify-center gap-2 cursor-pointer shadow-lg active:scale-[0.99] disabled:opacity-50"
+              >
+                {isSubmittingAuth ? 'AUTHENTICATING...' : 'LOGIN'}
+              </button>
+
+              <button
+                type="button"
+                onClick={onClose}
+                className="w-full py-2.5 bg-[#13192f] hover:bg-[#18203d] border border-[#273153] text-slate-300 rounded-xl font-bold transition-colors cursor-pointer text-center"
+              >
+                Return to Store
+              </button>
+            </div>
+          </form>
         </div>
       </div>
     );
@@ -839,7 +824,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
           <div className="flex items-center gap-2 font-mono text-xs">
             <div className="hidden lg:flex items-center gap-1.5 px-2.5 py-1 bg-[#080b14] border border-[#273153] rounded text-slate-300 text-[11px]">
               <UserIcon className="w-3 h-3 text-[#d4ff32]" />
-              <span className="truncate max-w-[150px]">{currentUser.email || 'Admin'}</span>
+              <span className="truncate max-w-[150px]">Store Administrator</span>
             </div>
 
             <button

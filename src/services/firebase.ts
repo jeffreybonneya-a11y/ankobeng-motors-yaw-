@@ -1,8 +1,7 @@
 import { initializeApp, getApps, getApp } from 'firebase/app';
 import { 
   getAuth, 
-  GoogleAuthProvider, 
-  signInWithPopup, 
+  signInWithCustomToken, 
   signOut, 
   onAuthStateChanged,
   User 
@@ -30,7 +29,6 @@ const app = getApps().length === 0 ? initializeApp(firebaseConfig) : getApp();
 
 export const db: Firestore = getFirestore(app, firebaseConfig.firestoreDatabaseId);
 export const auth = getAuth(app);
-export const googleProvider = new GoogleAuthProvider();
 
 export enum OperationType {
   CREATE = 'create',

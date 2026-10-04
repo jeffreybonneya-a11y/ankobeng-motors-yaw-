@@ -12,12 +12,12 @@ import {
   writeBatch
 } from 'firebase/firestore';
 import { 
-  signInWithPopup, 
+  signInWithCustomToken, 
   signOut, 
   onAuthStateChanged,
   User 
 } from 'firebase/auth';
-import { db, auth, googleProvider, handleFirestoreError, OperationType } from './firebase';
+import { db, auth, handleFirestoreError, OperationType } from './firebase';
 import { 
   Product, 
   Category, 
@@ -399,6 +399,23 @@ function sanitizeForFirestore<T>(data: T): T {
   return data;
 }
 
+// Helper to invoke session-authenticated server Firestore mutations
+async function performAdminMutation(action: 'set' | 'delete', collectionName: string, docId: string, data?: any): Promise<void> {
+  const sessionId = sessionStorage.getItem('admin_session_id') || '';
+  const res = await fetch('/api/admin/firestore', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      ...(sessionId ? { 'x-admin-session-id': sessionId } : {})
+    },
+    body: JSON.stringify({ action, collection: collectionName, docId, data })
+  });
+  if (!res.ok) {
+    const errData = await res.json().catch(() => ({}));
+    throw new Error(errData.error || 'Admin mutation failed');
+  }
+}
+
 export const dataService = {
   // --------------------------------------------------------------------------
   // Direct WhatsApp Order URL
@@ -417,7 +434,7 @@ export const dataService = {
   },
 
   // --------------------------------------------------------------------------
-  // Firebase Authentication
+  // Admin Server-Side Session & Authentication
   // --------------------------------------------------------------------------
   onAuthChange(callback: (user: User | null) => void) {
     return onAuthStateChanged(auth, callback);
@@ -427,19 +444,70 @@ export const dataService = {
     return auth.currentUser;
   },
 
-  async loginWithGoogle(): Promise<User> {
-    const result = await signInWithPopup(auth, googleProvider);
-    return result.user;
+  async loginAdminWithPhone(phone: string, password: string): Promise<{ success: boolean; message?: string }> {
+    try {
+      const res = await fetch('/api/admin/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ phone, password })
+      });
+      const data = await res.json();
+      
+      if (res.ok && data.success) {
+        if (data.sessionId) {
+          sessionStorage.setItem('admin_session_id', data.sessionId);
+        }
+        if (data.customToken) {
+          try {
+            await signInWithCustomToken(auth, data.customToken);
+          } catch (err) {
+            console.error('Firebase Auth sync error:', err);
+          }
+        }
+        return { success: true };
+      }
+      return { success: false, message: 'Invalid phone number or password.' };
+    } catch (err) {
+      return { success: false, message: 'Invalid phone number or password.' };
+    }
+  },
+
+  async checkAdminSession(): Promise<{ authenticated: boolean; phone?: string }> {
+    try {
+      const sessionId = sessionStorage.getItem('admin_session_id') || '';
+      const res = await fetch('/api/admin/session', {
+        headers: sessionId ? { 'x-admin-session-id': sessionId } : {}
+      });
+      const data = await res.json();
+      
+      if (data.authenticated) {
+        if (data.customToken && !auth.currentUser) {
+          try {
+            await signInWithCustomToken(auth, data.customToken);
+          } catch (err) {
+            console.error('Session restore token error:', err);
+          }
+        }
+        return { authenticated: true, phone: data.user?.phone };
+      }
+      return { authenticated: false };
+    } catch (err) {
+      return { authenticated: false };
+    }
   },
 
   async logoutAdmin(): Promise<void> {
+    const sessionId = sessionStorage.getItem('admin_session_id') || '';
+    try {
+      await fetch('/api/admin/logout', {
+        method: 'POST',
+        headers: sessionId ? { 'x-admin-session-id': sessionId } : {}
+      });
+    } catch (err) {
+      // ignore network logout error
+    }
+    sessionStorage.removeItem('admin_session_id');
     await signOut(auth);
-  },
-
-  async isUserAdmin(user: User | null): Promise<boolean> {
-    if (!user || !user.email) return false;
-    const AUTHORIZED_ADMIN_EMAIL = '10362581@upsamail.edu.gh';
-    return user.email.toLowerCase().trim() === AUTHORIZED_ADMIN_EMAIL.toLowerCase().trim();
   },
 
   // --------------------------------------------------------------------------
@@ -555,145 +623,84 @@ export const dataService = {
   // Cloud Firestore CRUD Operations
   // --------------------------------------------------------------------------
   async saveProduct(product: Omit<Product, 'id'> & { id?: string }): Promise<string> {
-    const path = `products/${product.id || 'new'}`;
-    try {
-      const id = product.id || `prod-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`;
-      const docRef = doc(db, 'products', id);
-      const dataToSave = sanitizeForFirestore({
-        ...product,
-        id,
-        updatedAt: new Date().toISOString(),
-        createdAt: product.createdAt || new Date().toISOString()
-      });
-      await setDoc(docRef, dataToSave);
-      return id;
-    } catch (error) {
-      handleFirestoreError(error, OperationType.WRITE, path);
-      throw error;
-    }
+    const id = product.id || `prod-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`;
+    const dataToSave = sanitizeForFirestore({
+      ...product,
+      id,
+      updatedAt: new Date().toISOString(),
+      createdAt: product.createdAt || new Date().toISOString()
+    });
+    await performAdminMutation('set', 'products', id, dataToSave);
+    return id;
   },
 
   async deleteProduct(id: string): Promise<void> {
-    const path = `products/${id}`;
-    try {
-      await deleteDoc(doc(db, 'products', id));
-    } catch (error) {
-      handleFirestoreError(error, OperationType.DELETE, path);
-      throw error;
-    }
+    await performAdminMutation('delete', 'products', id);
   },
 
   async saveCategory(category: Category): Promise<void> {
-    const path = `categories/${category.id}`;
-    try {
-      await setDoc(doc(db, 'categories', category.id), sanitizeForFirestore({
-        ...category,
-        updatedAt: new Date().toISOString(),
-        createdAt: category.createdAt || new Date().toISOString()
-      }));
-    } catch (error) {
-      handleFirestoreError(error, OperationType.WRITE, path);
-      throw error;
-    }
+    const data = sanitizeForFirestore({
+      ...category,
+      updatedAt: new Date().toISOString(),
+      createdAt: category.createdAt || new Date().toISOString()
+    });
+    await performAdminMutation('set', 'categories', category.id, data);
   },
 
   async deleteCategory(id: string): Promise<void> {
-    const path = `categories/${id}`;
-    try {
-      await deleteDoc(doc(db, 'categories', id));
-    } catch (error) {
-      handleFirestoreError(error, OperationType.DELETE, path);
-      throw error;
-    }
+    await performAdminMutation('delete', 'categories', id);
   },
 
   async saveHeroSlide(slide: HeroSlide): Promise<void> {
-    const path = `heroSlides/${slide.id}`;
-    try {
-      await setDoc(doc(db, 'heroSlides', slide.id), sanitizeForFirestore({
-        ...slide,
-        updatedAt: new Date().toISOString(),
-        createdAt: slide.createdAt || new Date().toISOString()
-      }));
-    } catch (error) {
-      handleFirestoreError(error, OperationType.WRITE, path);
-      throw error;
-    }
+    const data = sanitizeForFirestore({
+      ...slide,
+      updatedAt: new Date().toISOString(),
+      createdAt: slide.createdAt || new Date().toISOString()
+    });
+    await performAdminMutation('set', 'heroSlides', slide.id, data);
   },
 
   async deleteHeroSlide(id: string): Promise<void> {
-    const path = `heroSlides/${id}`;
-    try {
-      await deleteDoc(doc(db, 'heroSlides', id));
-    } catch (error) {
-      handleFirestoreError(error, OperationType.DELETE, path);
-      throw error;
-    }
+    await performAdminMutation('delete', 'heroSlides', id);
   },
 
   async saveHomepageContent(content: HomepageContent): Promise<void> {
-    const path = 'homepageContent/main';
-    try {
-      await setDoc(doc(db, 'homepageContent', 'main'), sanitizeForFirestore({
-        ...content,
-        updatedAt: new Date().toISOString()
-      }));
-    } catch (error) {
-      handleFirestoreError(error, OperationType.WRITE, path);
-      throw error;
-    }
+    const data = sanitizeForFirestore({
+      ...content,
+      updatedAt: new Date().toISOString()
+    });
+    await performAdminMutation('set', 'homepageContent', 'main', data);
   },
 
   async saveBusinessInfo(info: BusinessInfo): Promise<void> {
-    const path = 'businessInfo/main';
-    try {
-      await setDoc(doc(db, 'businessInfo', 'main'), sanitizeForFirestore({
-        ...info,
-        updatedAt: new Date().toISOString()
-      }));
-    } catch (error) {
-      handleFirestoreError(error, OperationType.WRITE, path);
-      throw error;
-    }
+    const data = sanitizeForFirestore({
+      ...info,
+      updatedAt: new Date().toISOString()
+    });
+    await performAdminMutation('set', 'businessInfo', 'main', data);
   },
 
   async saveWhatsAppSettings(settings: WhatsAppSettings): Promise<void> {
-    const path = 'settings/whatsapp';
-    try {
-      await setDoc(doc(db, 'settings', 'whatsapp'), sanitizeForFirestore({
-        ...settings,
-        updatedAt: new Date().toISOString()
-      }));
-    } catch (error) {
-      handleFirestoreError(error, OperationType.WRITE, path);
-      throw error;
-    }
+    const data = sanitizeForFirestore({
+      ...settings,
+      updatedAt: new Date().toISOString()
+    });
+    await performAdminMutation('set', 'settings', 'whatsapp', data);
   },
 
   async addMediaItem(item: Omit<MediaItem, 'id' | 'createdAt'>): Promise<string> {
     const id = `med-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`;
-    const path = `media/${id}`;
-    try {
-      await setDoc(doc(db, 'media', id), sanitizeForFirestore({
-        ...item,
-        id,
-        createdAt: new Date().toISOString()
-      }));
-      return id;
-    } catch (error) {
-      handleFirestoreError(error, OperationType.WRITE, path);
-      throw error;
-    }
+    const data = sanitizeForFirestore({
+      ...item,
+      id,
+      createdAt: new Date().toISOString()
+    });
+    await performAdminMutation('set', 'media', id, data);
+    return id;
   },
 
   async deleteMediaItem(id: string): Promise<void> {
-    const path = `media/${id}`;
-    try {
-      await deleteDoc(doc(db, 'media', id));
-    } catch (error) {
-      handleFirestoreError(error, OperationType.DELETE, path);
-      throw error;
-    }
+    await performAdminMutation('delete', 'media', id);
   },
 
   // --------------------------------------------------------------------------

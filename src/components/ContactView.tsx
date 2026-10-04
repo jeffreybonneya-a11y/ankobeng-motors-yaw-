@@ -17,8 +17,11 @@ export const ContactView: React.FC<ContactViewProps> = ({
 }) => {
   const storefrontImg = homepageContent?.homepageBackgroundImage || STOREFRONT_IMAGE;
   const mapCoordinates = '5.547731,-0.217733';
-  const googleMapsUrl = `https://www.google.com/maps/search/?api=1&query=${mapCoordinates}`;
-  const embedMapUrl = `https://maps.google.com/maps?q=${mapCoordinates}&hl=en&z=16&output=embed`;
+  const apiKey = import.meta.env.VITE_GOOGLE_MAPS_EMBED_API_KEY || 'AIzaSyDZxwFaEa0Tcv0i0WpJpA0XsE2Zae5NIVY';
+  const googleMapsUrl = `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent('5.547731,-0.217733')}`;
+  const embedMapUrl = apiKey
+    ? `https://www.google.com/maps/embed/v1/place?key=${apiKey}&q=${mapCoordinates}&zoom=16`
+    : `https://maps.google.com/maps?q=${mapCoordinates}&hl=en&z=16&output=embed`;
 
   return (
     <section className="py-16 bg-[#080b14] border-b border-[#273153]" id="contact" data-purpose="contact-hub">
@@ -142,10 +145,13 @@ export const ContactView: React.FC<ContactViewProps> = ({
                 <iframe
                   title="ANKOBENG MOTORS location map"
                   src={embedMapUrl}
-                  className="w-full h-full border-0"
+                  width="100%"
+                  height="100%"
+                  style={{ border: 0 }}
                   loading="lazy"
                   allowFullScreen
-                  referrerPolicy="no-referrer-when-downgrade"
+                  referrerPolicy="strict-origin-when-cross-origin"
+                  className="w-full h-full"
                 ></iframe>
               </div>
 
