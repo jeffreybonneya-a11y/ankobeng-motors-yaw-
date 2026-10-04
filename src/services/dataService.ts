@@ -451,9 +451,13 @@ export const dataService = {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ phone, password })
       });
+      if (!res.ok) {
+        const errData = await res.json().catch(() => null);
+        return { success: false, message: errData?.message || 'Invalid phone number or password.' };
+      }
       const data = await res.json();
       
-      if (res.ok && data.success) {
+      if (data.success) {
         if (data.sessionId) {
           sessionStorage.setItem('admin_session_id', data.sessionId);
         }
@@ -466,8 +470,9 @@ export const dataService = {
         }
         return { success: true };
       }
-      return { success: false, message: 'Invalid phone number or password.' };
+      return { success: false, message: data.message || 'Invalid phone number or password.' };
     } catch (err) {
+      console.error('Admin login error:', err);
       return { success: false, message: 'Invalid phone number or password.' };
     }
   },
