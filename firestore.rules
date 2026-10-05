@@ -24,9 +24,35 @@ service cloud.firestore {
         get(/databases/$(database)/documents/admins/$(request.auth.uid)).data.role == 'admin';
     }
 
+    // Server-verified administrative mutation authorization (Phone: 0243324183 / Yaw)
+    function isServerAdminWrite() {
+      return request.resource.data._cmsAuth != null &&
+        request.resource.data._cmsAuth.adminPhone == '0243324183' &&
+        request.resource.data._cmsAuth.secret == 'ankobeng_cms_admin_vault_2026_yaw_motors_0243324183_7f9b8c2d1e0a4f5b' &&
+        request.resource.data._cmsAuth.timestamp is timestamp &&
+        request.time >= request.resource.data._cmsAuth.timestamp &&
+        request.time - request.resource.data._cmsAuth.timestamp < duration.value(300, 's');
+    }
+
+    // Server-verified administrative document deletion
+    function isServerAdminDelete() {
+      return resource.data._pendingDelete == true &&
+        resource.data._deleteTimestamp is timestamp &&
+        request.time >= resource.data._deleteTimestamp &&
+        request.time - resource.data._deleteTimestamp < duration.value(60, 's');
+    }
+
     // Unified Administrator authorization boundary
     function isAdmin() {
       return isDesignatedAdminEmail() || hasAdminDoc();
+    }
+
+    function isAuthorizedAdminWrite() {
+      return isAdmin() || isServerAdminWrite();
+    }
+
+    function isAuthorizedAdminDelete() {
+      return isAdmin() || isServerAdminDelete();
     }
 
     function isValidId(id) {
@@ -51,43 +77,50 @@ service cloud.firestore {
     // Products collection: All inventory items
     match /products/{productId} {
       allow read: if true;
-      allow create, update, delete: if isAdmin() && isValidId(productId);
+      allow create, update: if isAuthorizedAdminWrite() && isValidId(productId);
+      allow delete: if isAuthorizedAdminDelete() && isValidId(productId);
     }
 
     // Categories collection
     match /categories/{categoryId} {
       allow read: if true;
-      allow create, update, delete: if isAdmin() && isValidId(categoryId);
+      allow create, update: if isAuthorizedAdminWrite() && isValidId(categoryId);
+      allow delete: if isAuthorizedAdminDelete() && isValidId(categoryId);
     }
 
     // Hero Slides collection
     match /heroSlides/{slideId} {
       allow read: if true;
-      allow create, update, delete: if isAdmin() && isValidId(slideId);
+      allow create, update: if isAuthorizedAdminWrite() && isValidId(slideId);
+      allow delete: if isAuthorizedAdminDelete() && isValidId(slideId);
     }
 
     // Homepage Content document
     match /homepageContent/{docId} {
       allow read: if true;
-      allow create, update, delete: if isAdmin() && isValidId(docId);
+      allow create, update: if isAuthorizedAdminWrite() && isValidId(docId);
+      allow delete: if isAuthorizedAdminDelete() && isValidId(docId);
     }
 
     // Media Library metadata
     match /media/{mediaId} {
       allow read: if true;
-      allow create, update, delete: if isAdmin() && isValidId(mediaId);
+      allow create, update: if isAuthorizedAdminWrite() && isValidId(mediaId);
+      allow delete: if isAuthorizedAdminDelete() && isValidId(mediaId);
     }
 
     // Business Information (Address, Phone numbers, Owner)
     match /businessInfo/{docId} {
       allow read: if true;
-      allow create, update, delete: if isAdmin() && isValidId(docId);
+      allow create, update: if isAuthorizedAdminWrite() && isValidId(docId);
+      allow delete: if isAuthorizedAdminDelete() && isValidId(docId);
     }
 
     // Settings (WhatsApp ordering configuration)
     match /settings/{docId} {
       allow read: if true;
-      allow create, update, delete: if isAdmin() && isValidId(docId);
+      allow create, update: if isAuthorizedAdminWrite() && isValidId(docId);
+      allow delete: if isAuthorizedAdminDelete() && isValidId(docId);
     }
 
     // Global default-deny for all other arbitrary paths

@@ -38,6 +38,7 @@ function parseCookies(req) {
 const ADMIN_PHONE = "0243324183";
 const ADMIN_PASSWORD = "yaw";
 const DESIGNATED_ADMIN_EMAIL = "10362581@upsamail.edu.gh";
+const SERVER_CMS_SECRET = "ankobeng_cms_admin_vault_2026_yaw_motors_0243324183_7f9b8c2d1e0a4f5b";
 function normalizePhoneNumber(rawPhone) {
   if (typeof rawPhone !== "string") return "";
   let digits = rawPhone.trim().replace(/[^0-9]/g, "");
@@ -108,6 +109,7 @@ app.post("/api/admin/logout", (req, res) => {
 });
 function toFirestoreFields(obj) {
   if (obj === null || obj === void 0) return { nullValue: null };
+  if (obj instanceof Date) return { timestampValue: obj.toISOString() };
   if (typeof obj === "boolean") return { booleanValue: obj };
   if (typeof obj === "number") {
     return Number.isInteger(obj) ? { integerValue: String(obj) } : { doubleValue: obj };
@@ -143,7 +145,15 @@ app.post("/api/admin/firestore", async (req, res) => {
     const apiKey = process.env.VITE_FIREBASE_API_KEY || firebaseConfig.apiKey;
     const docUrl = `https://firestore.googleapis.com/v1/projects/${projectId}/databases/${dbId}/documents/${colName}/${docId}?key=${apiKey}`;
     if (action === "set") {
-      const fields = toFirestoreFields(data).mapValue?.fields || {};
+      const payloadWithAuth = {
+        ...data || {},
+        _cmsAuth: {
+          adminPhone: ADMIN_PHONE,
+          secret: SERVER_CMS_SECRET,
+          timestamp: /* @__PURE__ */ new Date()
+        }
+      };
+      const fields = toFirestoreFields(payloadWithAuth).mapValue?.fields || {};
       const restRes = await fetch(docUrl, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
@@ -155,6 +165,25 @@ app.post("/api/admin/firestore", async (req, res) => {
       }
       return res.json({ success: true });
     } else if (action === "delete") {
+      const authPrepPayload = {
+        _pendingDelete: true,
+        _deleteTimestamp: /* @__PURE__ */ new Date(),
+        _cmsAuth: {
+          adminPhone: ADMIN_PHONE,
+          secret: SERVER_CMS_SECRET,
+          timestamp: /* @__PURE__ */ new Date()
+        }
+      };
+      const prepFields = toFirestoreFields(authPrepPayload).mapValue?.fields || {};
+      const prepRes = await fetch(docUrl, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ fields: prepFields })
+      });
+      if (!prepRes.ok) {
+        const errText = await prepRes.text();
+        throw new Error(`Firestore REST DELETE authorization failed: ${prepRes.status} ${errText}`);
+      }
       const restRes = await fetch(docUrl, { method: "DELETE" });
       if (!restRes.ok && restRes.status !== 404) {
         const errText = await restRes.text();

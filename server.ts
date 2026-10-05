@@ -55,6 +55,7 @@ function parseCookies(req: express.Request): Record<string, string> {
 const ADMIN_PHONE = '0243324183';
 const ADMIN_PASSWORD = 'yaw';
 const DESIGNATED_ADMIN_EMAIL = '10362581@upsamail.edu.gh';
+const SERVER_CMS_SECRET = 'ankobeng_cms_admin_vault_2026_yaw_motors_0243324183_7f9b8c2d1e0a4f5b';
 
 // Normalize phone numbers (strips non-digits, converts +233/233 to 0, preserves 0243324183)
 function normalizePhoneNumber(rawPhone: unknown): string {
@@ -152,6 +153,7 @@ app.post('/api/admin/logout', (req, res) => {
 
 function toFirestoreFields(obj: any): any {
   if (obj === null || obj === undefined) return { nullValue: null };
+  if (obj instanceof Date) return { timestampValue: obj.toISOString() };
   if (typeof obj === 'boolean') return { booleanValue: obj };
   if (typeof obj === 'number') {
     return Number.isInteger(obj) ? { integerValue: String(obj) } : { doubleValue: obj };
@@ -194,7 +196,17 @@ app.post('/api/admin/firestore', async (req, res) => {
     const docUrl = `https://firestore.googleapis.com/v1/projects/${projectId}/databases/${dbId}/documents/${colName}/${docId}?key=${apiKey}`;
 
     if (action === 'set') {
-      const fields = toFirestoreFields(data).mapValue?.fields || {};
+      // Inject verified server administrator authorization signature
+      const payloadWithAuth = {
+        ...(data || {}),
+        _cmsAuth: {
+          adminPhone: ADMIN_PHONE,
+          secret: SERVER_CMS_SECRET,
+          timestamp: new Date()
+        }
+      };
+
+      const fields = toFirestoreFields(payloadWithAuth).mapValue?.fields || {};
       const restRes = await fetch(docUrl, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
@@ -206,6 +218,29 @@ app.post('/api/admin/firestore', async (req, res) => {
       }
       return res.json({ success: true });
     } else if (action === 'delete') {
+      // Step 1: Pre-authorize document deletion with server authorization timestamp
+      const authPrepPayload = {
+        _pendingDelete: true,
+        _deleteTimestamp: new Date(),
+        _cmsAuth: {
+          adminPhone: ADMIN_PHONE,
+          secret: SERVER_CMS_SECRET,
+          timestamp: new Date()
+        }
+      };
+
+      const prepFields = toFirestoreFields(authPrepPayload).mapValue?.fields || {};
+      const prepRes = await fetch(docUrl, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ fields: prepFields })
+      });
+      if (!prepRes.ok) {
+        const errText = await prepRes.text();
+        throw new Error(`Firestore REST DELETE authorization failed: ${prepRes.status} ${errText}`);
+      }
+
+      // Step 2: Execute atomic deletion
       const restRes = await fetch(docUrl, { method: 'DELETE' });
       if (!restRes.ok && restRes.status !== 404) {
         const errText = await restRes.text();
